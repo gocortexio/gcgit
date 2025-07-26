@@ -1,0 +1,28 @@
+[package]
+name = "gcgit"
+version = "1.0.0"
+edition = "2021"
+description = "A Rust-based CLI tool for version-controlling Cortex XSIAM configurations"
+authors = ["gcgit team"]
+license = "MIT"
+repository = "https://github.com/example/gcgit"
+homepage = "https://github.com/example/gcgit"
+readme = "README.md"
+
+[[bin]]
+name = "gcgit"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.0", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+schemars = { version = "0.8", features = ["derive"] }
+toml = "0.8"
+reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }
+git2 = { version = "0.18", default-features = false, features = ["vendored-openssl"] }
+tokio = { version = "1.0", features = ["full"] }
+anyhow = "1.0"
+uuid = { version = "1.0", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }

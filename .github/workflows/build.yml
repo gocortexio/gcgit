@@ -1,0 +1,153 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            name: gcgit-linux-x86_64
+            package_type: tar
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            name: gcgit-linux-aarch64
+            package_type: tar
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            name: gcgit-macos-x86_64
+            package_type: tar
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            name: gcgit-macos-aarch64
+            package_type: tar
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ matrix.target }}
+
+    - name: Install cross (for Linux ARM64)
+      if: matrix.target == 'aarch64-unknown-linux-gnu'
+      run: cargo install cross --git https://github.com/cross-rs/cross
+
+    - name: Cache dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-${{ matrix.target }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-${{ matrix.target }}-cargo-release-
+
+    - name: Build release binary (cross)
+      if: matrix.target == 'aarch64-unknown-linux-gnu'
+      run: cross build --release --target ${{ matrix.target }}
+
+    - name: Build release binary (native)
+      if: matrix.target != 'aarch64-unknown-linux-gnu'
+      run: cargo build --release --target ${{ matrix.target }}
+
+    - name: Strip binary
+      if: matrix.os != 'windows-latest' && matrix.target != 'aarch64-unknown-linux-gnu'
+      run: strip target/${{ matrix.target }}/release/gcgit
+
+    - name: Create release directory
+      run: mkdir -p release
+
+    - name: Create tarball
+      run: |
+        cp target/${{ matrix.target }}/release/gcgit release/${{ matrix.name }}
+        cd release
+        tar -czf ${{ matrix.name }}.tar.gz ${{ matrix.name }}
+        rm ${{ matrix.name }}
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.name }}
+        path: release/
+
+  create-release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Prepare release files
+      run: |
+        mkdir -p release-files
+        find artifacts -name "*.tar.gz" -exec cp {} release-files/ \;
+        ls -la release-files/
+
+    - name: Create release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: release-files/*
+        generate_release_notes: true
+        draft: false
+        prerelease: false
+        body: |
+          ## gcgit ${{ github.ref_name }} Release
+          
+          Go Cortex Git is a Rust-based command-line interface (CLI) tool designed to serve as a lightweight abstraction layer between local Git operations and the Cortex XSIAM REST API. Its purpose is to enable security teams to version-control and deploy Cortex XSIAM configuration objects—such as Correlation Searches, Dashboards, BIOCs, and Scripts—without requiring a full-scale CI/CD pipeline or remote Git hosting. By wrapping standard Git workflows and translating file changes into corresponding API actions, gcgit streamlines content management within XSIAM while keeping everything local and traceable via Git.
+          
+          ### Downloads
+          - **Linux (x86_64)**: Download `gcgit-linux-x86_64.tar.gz`
+          - **Linux (aarch64)**: Download `gcgit-linux-aarch64.tar.gz`
+          - **macOS (Intel)**: Download `gcgit-macos-x86_64.tar.gz`
+          - **macOS (Apple Silicon)**: Download `gcgit-macos-aarch64.tar.gz`
+          
+          ### Installation
+          
+          #### Linux/macOS
+          ```bash
+          tar -xzf gcgit-*.tar.gz
+          sudo mv gcgit-* /usr/local/bin/gcgit
+          ```
+          
+          ### Usage
+          Initialize a new XSIAM instance:
+          ```bash
+          gcgit init --instance myinstance
+          ```
+          
+          Pull configurations from XSIAM:
+          ```bash
+          gcgit xsiam pull --instance myinstance
+          ```
+          
+          Check status:
+          ```bash
+          gcgit xsiam status --instance myinstance
+          ```
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
