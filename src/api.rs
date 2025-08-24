@@ -42,17 +42,26 @@ impl XsiamClient {
         let endpoint = self.get_delete_endpoint(&object.content_type);
         let url = format!("https://{}/public_api/v1/{}", self.config.fqdn, endpoint);
 
+        // Get the correct request data format based on content type
+        let registry = crate::content_types::ContentTypeRegistry::new();
+        let request_data = if let Some(config) = registry.get(&object.content_type) {
+            config.get_request_data(&object.id)
+        } else {
+            // Fallback for unknown content types
+            serde_json::json!({
+                "request_data": {
+                    "id": object.id
+                }
+            })
+        };
+
         let response = self.client
             .post(&url)
             .header("x-xdr-auth-id", &self.config.api_key_id)
             .header("Authorization", &self.config.api_key)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")
-            .json(&serde_json::json!({
-                "request_data": {
-                    "rule_id": object.id
-                }
-            }))
+            .json(&request_data)
             .send()
             .await
             .with_context(|| format!("Failed to send delete request to {}", url))?;
@@ -516,14 +525,27 @@ impl XsiamClient {
         let endpoint = self.get_delete_endpoint(content_type);
         let url = format!("https://{}/public_api/v1/{}", self.config.fqdn, endpoint);
 
-        // Delete request format: {"request_data": {"objects_count": N, "objects": [id1, id2, ...]}}
-        let id_num = id.parse::<i64>().unwrap_or(0);
-        let request_data = serde_json::json!({
-            "request_data": {
-                "objects_count": 1,
-                "objects": [id_num]
+        // Get the correct request data format based on content type
+        let registry = crate::content_types::ContentTypeRegistry::new();
+        let request_data = if let Some(config) = registry.get(content_type) {
+            config.get_request_data(id)
+        } else {
+            // Fallback for unknown content types - try both string and integer IDs
+            if let Ok(id_num) = id.parse::<i64>() {
+                serde_json::json!({
+                    "request_data": {
+                        "objects_count": 1,
+                        "objects": [id_num]
+                    }
+                })
+            } else {
+                serde_json::json!({
+                    "request_data": {
+                        "id": id
+                    }
+                })
             }
-        });
+        };
 
         let response = self.client
             .post(&url)

@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 use std::env;
+use crate::git_wrapper::GitWrapper;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct XsiamConfig {
@@ -152,6 +153,16 @@ instance_name = "{}"
         let config_path = format!("{}/config.toml", instance_name);
         fs::write(&config_path, config_content)
             .with_context(|| format!("Failed to write config file: {}", config_path))?;
+
+        // Initialize git repository
+        let _git_repo = GitWrapper::new(instance_name)
+            .with_context(|| format!("Failed to initialize git repository in: {}", instance_name))?;
+
+        // Create .gitignore file to exclude config.toml from version control
+        let gitignore_path = format!("{}/.gitignore", instance_name);
+        let gitignore_content = "*.toml\n";
+        fs::write(&gitignore_path, gitignore_content)
+            .with_context(|| format!("Failed to create .gitignore file: {}", gitignore_path))?;
 
         Ok(())
     }

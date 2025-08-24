@@ -87,8 +87,8 @@ impl ContentTypeRegistry {
             get_endpoint: "authentication-settings/get/settings",
             insert_endpoint: "authentication-settings/insert",
             delete_endpoint: "authentication-settings/delete",
-            id_field: "id",
-            request_id_key: "id",
+            id_field: "name",
+            request_id_key: "name",
         });
         
         // Example for future content types:

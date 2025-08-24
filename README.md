@@ -2,6 +2,7 @@
 
 Go Cortex Git is a Rust-based command-line interface (CLI) tool designed to serve as a lightweight abstraction layer between local Git operations and the Cortex XSIAM REST API. Its purpose is to enable security teams to version-control and deploy Cortex XSIAM configuration objects—such as Correlation Searches, Dashboards, BIOCs, and Scripts—without requiring a full-scale CI/CD pipeline or remote Git hosting. By wrapping standard Git workflows and translating file changes into corresponding API actions, gcgit streamlines content management within XSIAM while keeping everything local and traceable via Git.
 
+
 ## Quick Start
 
 ### 1. Install gcgit
