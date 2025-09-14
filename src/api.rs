@@ -70,7 +70,7 @@ impl XsiamClient {
     }
 
     pub async fn test_all_endpoints(&self) -> Result<()> {
-        println!("🔍 Testing XSIAM API connectivity...\n");
+        println!("Testing XSIAM API connectivity...\n");
         
         let content_types = ContentTypeRegistry::new().get_all_content_types();
         let mut successful_endpoints = 0;
@@ -86,30 +86,30 @@ impl XsiamClient {
                 Ok((status, _count, _sample_name)) => {
                     match status.as_str() {
                         "200" => {
-                            println!("✅ {}", status);
+                            println!("SUCCESS: {}", status);
                             successful_endpoints += 1;
                         }
                         _ => {
-                            println!("⚠️  {} - Endpoint responded but may have issues", status);
+                            println!("WARNING: {} - Endpoint responded but may have issues", status);
                         }
                     }
                 }
                 Err(e) => {
-                    println!("❌ FAILED - {}", e);
+                    println!("FAILED - {}", e);
                 }
             }
         }
         
-        println!("\n📊 Connectivity Test Summary:");
-        println!("  ✅ Successful: {}/{}", successful_endpoints, total_endpoints);
-        println!("  ❌ Failed:     {}/{}", total_endpoints - successful_endpoints, total_endpoints);
+        println!("\nConnectivity Test Summary:");
+        println!("  Successful: {}/{}", successful_endpoints, total_endpoints);
+        println!("  Failed:     {}/{}", total_endpoints - successful_endpoints, total_endpoints);
         
         if successful_endpoints == total_endpoints {
-            println!("  🎉 All endpoints are accessible!");
+            println!("  All endpoints are accessible!");
         } else if successful_endpoints > 0 {
-            println!("  ⚠️  Some endpoints may not be available on this XSIAM instance");
+            println!("  WARNING: Some endpoints may not be available on this XSIAM instance");
         } else {
-            println!("  🚨 No endpoints are responding - check configuration and network connectivity");
+            println!("  ERROR: No endpoints are responding - check configuration and network connectivity");
         }
         
         Ok(())

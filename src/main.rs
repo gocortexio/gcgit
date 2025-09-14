@@ -93,7 +93,7 @@ async fn handle_xsiam_command(command: XsiamCommands) -> Result<()> {
                         }
                     }
                     Err(e) => {
-                        println!("  ⚠ Warning: Failed to pull {} - {}", content_type, e);
+                        println!("  WARNING: Failed to pull {} - {}", content_type, e);
                         println!("  (This endpoint may not be available on your XSIAM instance)");
                     }
                 }
@@ -148,7 +148,7 @@ async fn handle_xsiam_command(command: XsiamCommands) -> Result<()> {
 
                     }
                     Err(e) => {
-                        println!("Warning: Failed to initialize Git repository for instance: {}", e);
+                        println!("Warning: Failed to initialise Git repository for instance: {}", e);
                     }
                 }
             }
@@ -258,7 +258,7 @@ async fn handle_init_command(instance: String) -> Result<()> {
     let config_manager = ConfigManager::new();
     config_manager.init_instance(&instance)?;
     
-    println!("Initialized instance: {}", instance);
+    println!("Initialised instance: {}", instance);
     println!("Please edit {}/config.toml with your XSIAM API credentials", instance);
     
     Ok(())
@@ -370,7 +370,7 @@ async fn show_instance_status(config_manager: &ConfigManager, instance_name: &st
             }
         }
         Err(_) => {
-            println!("  Git: No repository (run gcgit xsiam pull to initialize)");
+            println!("  Git: No repository (run gcgit xsiam pull to initialise)");
         }
     }
     

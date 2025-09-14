@@ -154,9 +154,9 @@ instance_name = "{}"
         fs::write(&config_path, config_content)
             .with_context(|| format!("Failed to write config file: {}", config_path))?;
 
-        // Initialize git repository
+        // Initialise git repository
         let _git_repo = GitWrapper::new(instance_name)
-            .with_context(|| format!("Failed to initialize git repository in: {}", instance_name))?;
+            .with_context(|| format!("Failed to initialise git repository in: {}", instance_name))?;
 
         // Create .gitignore file to exclude config.toml from version control
         let gitignore_path = format!("{}/.gitignore", instance_name);

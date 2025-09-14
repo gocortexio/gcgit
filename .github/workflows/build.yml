@@ -18,20 +18,20 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            name: gcgit-linux-x86_64
+            target: x86_64-unknown-linux-musl
+            name: linux-musl-x86_64
             package_type: tar
           - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            name: gcgit-linux-aarch64
+            target: aarch64-unknown-linux-musl
+            name: linux-musl-aarch64
             package_type: tar
           - os: macos-latest
             target: x86_64-apple-darwin
-            name: gcgit-macos-x86_64
+            name: macos-x86_64
             package_type: tar
           - os: macos-latest
             target: aarch64-apple-darwin
-            name: gcgit-macos-aarch64
+            name: macos-aarch64
             package_type: tar
 
     runs-on: ${{ matrix.os }}
@@ -45,9 +45,24 @@ jobs:
       with:
         targets: ${{ matrix.target }}
 
+    - name: Install jq (for version extraction)
+      run: |
+        if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
+          sudo apt-get update
+          sudo apt-get install -y jq
+        else
+          brew install jq
+        fi
+
     - name: Install cross (for Linux ARM64)
-      if: matrix.target == 'aarch64-unknown-linux-gnu'
+      if: matrix.target == 'aarch64-unknown-linux-musl'
       run: cargo install cross --git https://github.com/cross-rs/cross
+
+    - name: Install musl-tools (for Linux x86_64 MUSL)
+      if: matrix.target == 'x86_64-unknown-linux-musl'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y musl-tools
 
     - name: Cache dependencies
       uses: actions/cache@v4
@@ -61,32 +76,59 @@ jobs:
           ${{ runner.os }}-${{ matrix.target }}-cargo-release-
 
     - name: Build release binary (cross)
-      if: matrix.target == 'aarch64-unknown-linux-gnu'
+      if: matrix.target == 'aarch64-unknown-linux-musl'
       run: cross build --release --target ${{ matrix.target }}
 
     - name: Build release binary (native)
-      if: matrix.target != 'aarch64-unknown-linux-gnu'
+      if: matrix.target != 'aarch64-unknown-linux-musl'
       run: cargo build --release --target ${{ matrix.target }}
+      env:
+        CC: ${{ matrix.target == 'x86_64-unknown-linux-musl' && 'musl-gcc' || '' }}
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: ${{ matrix.target == 'x86_64-unknown-linux-musl' && 'musl-gcc' || '' }}
+
+    - name: Verify static linkage (Linux MUSL only)
+      if: contains(matrix.target, 'linux-musl')
+      run: |
+        echo "Checking binary information:"
+        file target/${{ matrix.target }}/release/gcgit
+        echo "Checking dynamic dependencies (should be minimal for static binary):"
+        ldd target/${{ matrix.target }}/release/gcgit || echo "No dynamic dependencies found (expected for static binary)"
+        echo "Verifying no glibc dependency:"
+        if ldd target/${{ matrix.target }}/release/gcgit 2>/dev/null | grep -i glibc; then
+          echo "ERROR: Binary has glibc dependency - static linking failed!"
+          exit 1
+        else
+          echo "SUCCESS: No glibc dependency detected"
+        fi
 
     - name: Strip binary
-      if: matrix.os != 'windows-latest' && matrix.target != 'aarch64-unknown-linux-gnu'
+      if: matrix.os != 'windows-latest' && matrix.target != 'aarch64-unknown-linux-musl'
       run: strip target/${{ matrix.target }}/release/gcgit
+
+    - name: Get version info
+      id: version
+      run: |
+        VERSION=$(cargo metadata --format-version 1 | jq -r '.packages[] | select(.name == "gcgit") | .version')
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "target=${{ matrix.target }}" >> $GITHUB_OUTPUT
+        echo "name=${{ matrix.name }}" >> $GITHUB_OUTPUT
 
     - name: Create release directory
       run: mkdir -p release
 
     - name: Create tarball
       run: |
-        cp target/${{ matrix.target }}/release/gcgit release/${{ matrix.name }}
+        cp target/${{ matrix.target }}/release/gcgit release/gcgit-${{ steps.version.outputs.version }}-${{ matrix.name }}
         cd release
-        tar -czf ${{ matrix.name }}.tar.gz ${{ matrix.name }}
-        rm ${{ matrix.name }}
+        tar -czf gcgit-${{ steps.version.outputs.version }}-${{ matrix.name }}.tar.gz gcgit-${{ steps.version.outputs.version }}-${{ matrix.name }}
+        rm gcgit-${{ steps.version.outputs.version }}-${{ matrix.name }}
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ matrix.name }}
-        path: release/
+        name: gcgit-${{ steps.version.outputs.version }}-${{ matrix.name }}
+        path: release/gcgit-${{ steps.version.outputs.version }}-${{ matrix.name }}.tar.gz
+        retention-days: 30
 
   create-release:
     needs: build
@@ -116,38 +158,60 @@ jobs:
         draft: false
         prerelease: false
         body: |
-          ## gcgit ${{ github.ref_name }} Release
+          ## gcgit ${{ github.ref_name }} - Git for Cortex XSIAM
           
-          Go Cortex Git is a Rust-based command-line interface (CLI) tool designed to serve as a lightweight abstraction layer between local Git operations and the Cortex XSIAM REST API. Its purpose is to enable security teams to version-control and deploy Cortex XSIAM configuration objects—such as Correlation Searches, Dashboards, BIOCs, and Scripts—without requiring a full-scale CI/CD pipeline or remote Git hosting. By wrapping standard Git workflows and translating file changes into corresponding API actions, gcgit streamlines content management within XSIAM while keeping everything local and traceable via Git.
+          Go Cortex Git is a Rust-based command-line interface (CLI) tool designed to serve as a lightweight abstraction layer between local Git operations and the Cortex XSIAM REST API. Its purpose is to enable security teams to version-control and deploy Cortex XSIAM configuration objects—such as Correlation Searches, Dashboards, BIOCs, and Scripts—without requiring a full-scale CI/CD pipeline or remote Git hosting.
           
-          ### Downloads
-          - **Linux (x86_64)**: Download `gcgit-linux-x86_64.tar.gz`
-          - **Linux (aarch64)**: Download `gcgit-linux-aarch64.tar.gz`
-          - **macOS (Intel)**: Download `gcgit-macos-x86_64.tar.gz`
-          - **macOS (Apple Silicon)**: Download `gcgit-macos-aarch64.tar.gz`
+          This release includes binaries for multiple architectures:
+          
+          **Recommended (Static builds, no GLIBC dependency):**
+          - `linux-musl-x86_64`: Universal Linux 64-bit (static, works on any Linux distribution)
+          - `linux-musl-aarch64`: Universal Linux ARM64 (static, works on any Linux distribution)
+          
+          **macOS builds:**
+          - `macos-x86_64`: macOS Intel 64-bit
+          - `macos-aarch64`: macOS Apple Silicon (M1/M2)
           
           ### Installation
           
-          #### Linux/macOS
+          **For maximum compatibility (recommended):**
           ```bash
-          tar -xzf gcgit-*.tar.gz
-          sudo mv gcgit-* /usr/local/bin/gcgit
+          # Download universal static binary (works on any Linux distribution)
+          wget https://github.com/gocortex/gcgit/releases/download/${{ github.ref_name }}/gcgit-${{ github.ref_name }}-linux-musl-x86_64.tar.gz
+          tar -xzf gcgit-${{ github.ref_name }}-linux-musl-x86_64.tar.gz
+          sudo mv gcgit-${{ github.ref_name }}-linux-musl-x86_64 /usr/local/bin/gcgit
+          ```
+          
+          **For macOS:**
+          ```bash
+          # For Apple Silicon (M1/M2)
+          wget https://github.com/gocortex/gcgit/releases/download/${{ github.ref_name }}/gcgit-${{ github.ref_name }}-macos-aarch64.tar.gz
+          tar -xzf gcgit-${{ github.ref_name }}-macos-aarch64.tar.gz
+          sudo mv gcgit-${{ github.ref_name }}-macos-aarch64 /usr/local/bin/gcgit
           ```
           
           ### Usage
-          Initialize a new XSIAM instance:
           ```bash
+          # Initialise a new XSIAM instance
           gcgit init --instance myinstance
-          ```
           
-          Pull configurations from XSIAM:
-          ```bash
+          # Pull configurations from XSIAM
           gcgit xsiam pull --instance myinstance
+          
+          # Check status
+          gcgit xsiam status --instance myinstance
+          
+          # Test connectivity
+          gcgit xsiam test --instance myinstance
+          
+          # Get help
+          gcgit --help
           ```
           
-          Check status:
-          ```bash
-          gcgit xsiam status --instance myinstance
-          ```
+          ### Technical Details
+          - **Built with Rust:** High performance and memory safety
+          - **XSIAM Integration:** Native support for all five content types
+          - **Cross-platform:** Multiple operating systems and architectures supported
+          - **Git Integration:** Local version control with automated change detection
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

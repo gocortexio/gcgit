@@ -17,13 +17,13 @@ pub enum Commands {
         #[command(subcommand)]
         command: XsiamCommands,
     },
-    /// Initialize a new instance
+    /// Initialise a new instance
     Init {
         /// Instance name
         #[arg(long)]
         instance: String,
     },
-    /// Show Git and XSIAM synchronization status
+    /// Show Git and XSIAM synchronisation status
     Status {
         /// Instance name to check (optional - shows all if not specified)
         #[arg(long)]

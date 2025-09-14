@@ -10,7 +10,7 @@ impl GitWrapper {
     pub fn new(path: &str) -> Result<Self> {
         let repo = Repository::open(path)
             .or_else(|_| Repository::init(path))
-            .context("Failed to open or initialize Git repository")?;
+            .context("Failed to open or initialise Git repository")?;
 
         Ok(Self { repo })
     }
@@ -25,7 +25,7 @@ impl GitWrapper {
 
         let repo = Repository::open(instance_name)
             .or_else(|_| Repository::init(instance_name))
-            .context("Failed to open or initialize Git repository for instance")?;
+            .context("Failed to open or initialise Git repository for instance")?;
 
         Ok(Self { repo })
     }
