@@ -3,19 +3,21 @@ use anyhow::Result;
 
 mod cli;
 mod config;
-mod content_types;
 mod git_wrapper;
 mod api;
 mod parser;
 mod error;
 mod types;
+mod zip_safety;
+mod modules;
+mod lock;
 
-use cli::{Cli, Commands, XsiamCommands};
+use cli::{Cli, Commands, ModuleCommands};
 use config::ConfigManager;
-use content_types::ContentTypeRegistry;
 use git_wrapper::GitWrapper;
-use api::XsiamClient;
 use parser::YamlParser;
+use modules::ModuleRegistry;
+use lock::InstanceLock;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -23,7 +25,10 @@ async fn main() -> Result<()> {
     
     match cli.command {
         Some(Commands::Xsiam { command }) => {
-            handle_xsiam_command(command).await?;
+            handle_module_command("xsiam", command).await?;
+        }
+        Some(Commands::Appsec { command }) => {
+            handle_module_command("appsec", command).await?;
         }
         Some(Commands::Init { instance }) => {
             handle_init_command(instance).await?;
@@ -32,7 +37,13 @@ async fn main() -> Result<()> {
             handle_status_command(instance).await?;
         }
         Some(Commands::Deploy { instance: _, message: _, files: _ }) => {
-            println!("This command did not run as the feature is still under development, keep an eye on https://gocortex.io for updates");
+            eprintln!("ERROR: Feature not yet available");
+            eprintln!();
+            eprintln!("Usage: gcgit deploy [OPTIONS]");
+            eprintln!();
+            eprintln!("This feature is still under development.");
+            eprintln!("Visit https://gocortex.io for updates on feature availability.");
+            std::process::exit(1);
         }
         Some(Commands::Validate { instance, files }) => {
             handle_validate_command(instance, files).await?;
@@ -48,53 +59,77 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn handle_xsiam_command(command: XsiamCommands) -> Result<()> {
+async fn handle_module_command(module_id: &str, command: ModuleCommands) -> Result<()> {
+    // Get the module from registry
+    let module_registry = ModuleRegistry::load();
+    let module = module_registry.get(module_id)
+        .ok_or_else(|| anyhow::anyhow!("Module '{}' not found", module_id))?;
+    
     match command {
-        XsiamCommands::Push { instance: _ } => {
-            println!("This command did not run as the feature is still under development, keep an eye on https://gocortex.io for updates");
-            return Ok(());
+        ModuleCommands::Push { instance: _ } => {
+            let module_upper = module_id.to_uppercase();
+            eprintln!("ERROR: Feature not yet available");
+            eprintln!();
+            eprintln!("Usage: gcgit {module_id} push --instance <NAME>");
+            eprintln!();
+            eprintln!("Push operations for {module_upper} are still under development.");
+            eprintln!("Visit https://gocortex.io for updates on feature availability.");
+            std::process::exit(1);
         }
-        XsiamCommands::Pull { instance } => {
+        ModuleCommands::Pull { instance } => {
             let instance_name = instance.unwrap_or_else(|| "default".to_string());
             
-            let config_manager = ConfigManager::new();
-            let instance_config = config_manager.load_instance_config(&instance_name)?;
+            // Acquire lock to prevent concurrent operations on the same instance
+            let _lock = InstanceLock::acquire(&instance_name)?;
             
-            let xsiam_client = XsiamClient::new(instance_config);
+            let config_manager = ConfigManager::new();
+            let module_config = config_manager.load_module_config(&instance_name, module_id)?;
+            
+            // Check if module is enabled
+            if !module_config.enabled {
+                println!("Module '{module_id}' is disabled in instance '{instance_name}'. Enable it in config.toml to use this command.");
+                return Ok(());
+            }
+            
+            let module_client = api::ModuleClient::new(module_config, module.base_api_path());
             let yaml_parser = YamlParser::new();
             
-            // Pull each content type, handling errors gracefully
-            let registry = ContentTypeRegistry::new();
-            let content_types = registry.get_all_types();
+            // Pull each content type defined in the module
+            let content_types = module.content_types();
             
             let mut _total_pulled = 0;
             let mut pulled_files = Vec::new();
             
-            for content_type in content_types {
-                println!("Pulling {}...", content_type);
-                match xsiam_client.get_objects(content_type).await {
+            for content_def in content_types {
+                println!("Pulling {}...", content_def.name);
+                match module_client.pull_content_type(&content_def).await {
                     Ok(objects) => {
-                        println!("  Found {} {}(s)", objects.len(), content_type);
+                        println!("  Found {} {}(s)", objects.len(), content_def.name);
                         for object in objects {
                             // Create filename from name, falling back to ID if name is empty
-                            let filename = if object.name.trim().is_empty() {
-                                format!("{}_id_{}", content_type.trim_end_matches('s'), object.id)
+                            let filename = if let Some(name) = &object.name {
+                                if name.trim().is_empty() {
+                                    format!("{}_id_{}", content_def.name.trim_end_matches('s'), object.id)
+                                } else {
+                                    name.replace(" ", "_").replace("/", "_").replace("\\", "_")
+                                }
                             } else {
-                                object.name.replace(" ", "_").replace("/", "_").replace("\\", "_")
+                                format!("{}_id_{}", content_def.name.trim_end_matches('s'), object.id)
                             };
                             
-                            let file_path = format!("{}/{}/{}.yaml", instance_name, content_type, filename);
+                            // NEW directory structure: instance/module_id/content_type/filename.yaml
+                            let file_path = format!("{}/{}/{}/{}.yaml", instance_name, module_id, content_def.name, filename);
                             yaml_parser.write_file(&file_path, &object)?;
-                            println!("  Pulled: {}", file_path);
-                            // Store relative path for Git operations (without instance prefix)
-                            let relative_path = format!("{}/{}.yaml", content_type, filename);
+                            println!("  Pulled: {file_path}");
+                            // Store relative path for Git operations (relative to instance directory)
+                            let relative_path = format!("{}/{}/{}.yaml", module_id, content_def.name, filename);
                             pulled_files.push(relative_path);
                             _total_pulled += 1;
                         }
                     }
                     Err(e) => {
-                        println!("  WARNING: Failed to pull {} - {}", content_type, e);
-                        println!("  (This endpoint may not be available on your XSIAM instance)");
+                        println!("  WARNING: Failed to pull {} - {}", content_def.name, e);
+                        println!("  (This endpoint may not be available on your instance)");
                     }
                 }
             }
@@ -105,7 +140,6 @@ async fn handle_xsiam_command(command: XsiamCommands) -> Result<()> {
                 
                 match GitWrapper::new_for_instance(&instance_name) {
                     Ok(git_wrapper) => {
-
                         // Use Git's native change detection - much faster than API calls
                         match git_wrapper.has_changes_after_add(&pulled_files) {
                             Ok((true, changed_count, changed_files)) => {
@@ -113,7 +147,7 @@ async fn handle_xsiam_command(command: XsiamCommands) -> Result<()> {
                                 let changed_file_names: Vec<String> = changed_files.iter()
                                     .map(|path| {
                                         // Extract just the filename from the path for readability
-                                        if let Some(filename) = path.split('/').last() {
+                                        if let Some(filename) = path.split('/').next_back() {
                                             filename.replace(".yaml", "")
                                         } else {
                                             path.clone()
@@ -121,68 +155,92 @@ async fn handle_xsiam_command(command: XsiamCommands) -> Result<()> {
                                     })
                                     .collect();
                                 
+                                let module_upper = module_id.to_uppercase();
                                 let commit_message = if changed_count == 1 {
-                                    format!("Auto-commit: Updated {} from XSIAM", changed_file_names[0])
+                                    format!("Auto-commit: Updated {} from {}", changed_file_names[0], module_upper)
                                 } else if changed_count <= 3 {
-                                    format!("Auto-commit: Updated {} from XSIAM", changed_file_names.join(", "))
+                                    format!("Auto-commit: Updated {} from {}", changed_file_names.join(", "), module_upper)
                                 } else {
-                                    format!("Auto-commit: Updated {} files from XSIAM ({})", changed_count, changed_file_names[..2].join(", "))
+                                    format!("Auto-commit: Updated {} files from {} ({})", changed_count, module_upper, changed_file_names[..2].join(", "))
                                 };
                                 
                                 if let Err(e) = git_wrapper.commit(&commit_message) {
-                                    println!("Warning: Failed to commit changes: {}", e);
+                                    println!("Warning: Failed to commit changes: {e}");
                                 } else {
                                     let file_word = if changed_count == 1 { "file" } else { "files" };
-                                    println!("✓ Successfully processed {} pulled files to instance Git repository", pulled_files.len());
-                                    println!("  {} {} actually changed and committed", changed_count, file_word);
+                                    println!("Successfully processed {} pulled files to instance Git repository", pulled_files.len());
+                                    println!("  {changed_count} {file_word} actually changed and committed");
                                 }
                             }
                             Ok((false, _, _)) => {
-                                println!("✓ Successfully processed {} pulled files to instance Git repository", pulled_files.len());
-                                println!("  No Git changes detected - XSIAM objects serialize to identical YAML");
+                                println!("Successfully processed {} pulled files to instance Git repository", pulled_files.len());
+                                println!("  No Git changes detected - objects serialise to identical YAML");
                             }
                             Err(e) => {
-                                println!("Warning: Failed to check for changes: {}", e);
+                                println!("Warning: Failed to check for changes: {e}");
                             }
                         }
-
                     }
                     Err(e) => {
-                        println!("Warning: Failed to initialise Git repository for instance: {}", e);
+                        println!("Warning: Failed to initialise Git repository for instance: {e}");
                     }
                 }
             }
         }
-        XsiamCommands::Diff { instance } => {
+        ModuleCommands::Diff { instance } => {
             let instance_name = instance.unwrap_or_else(|| "default".to_string());
             
             let config_manager = ConfigManager::new();
-            let instance_config = config_manager.load_instance_config(&instance_name)?;
+            let module_config = config_manager.load_module_config(&instance_name, module_id)?;
             
-            let xsiam_client = XsiamClient::new(instance_config);
+            // Check if module is enabled
+            if !module_config.enabled {
+                println!("Module '{module_id}' is disabled in instance '{instance_name}'. Enable it in config.toml to use this command.");
+                return Ok(());
+            }
+            
+            let module_client = api::ModuleClient::new(module_config, module.base_api_path());
             let yaml_parser = YamlParser::new();
             
-            let local_files = yaml_parser.get_local_files(&instance_name)?;
+            // Get local files from the module-specific directory
+            let module_dir = format!("{instance_name}/{module_id}");
+            
+            // Get content type names from the module definition
+            let content_type_names: Vec<&str> = module.content_types()
+                .iter()
+                .map(|ct| ct.name)
+                .collect();
+            
+            let local_files = yaml_parser.get_local_files(&module_dir, &content_type_names)?;
             
             if local_files.is_empty() {
-                println!("No local YAML files found in instance '{}'", instance_name);
-                println!("Run 'gcgit xsiam pull --instance {}' to fetch configurations first", instance_name);
+                println!("No local YAML files found for module '{module_id}' in instance '{instance_name}'");
+                println!("Run 'gcgit {module_id} pull --instance {instance_name}' to fetch configurations first");
                 return Ok(());
             }
             
             let mut differences_found = false;
             
+            // Get content type definitions once (needed for lifetime)
+            let content_types = module.content_types();
+            
             for file_path in local_files {
                 let local_content = yaml_parser.parse_file(&file_path)?;
                 
-                match xsiam_client.get_object_by_id(&local_content.content_type, &local_content.id).await {
+                // Find the ContentTypeDefinition for this content type
+                let content_def = content_types
+                    .iter()
+                    .find(|ct| ct.name == local_content.content_type)
+                    .ok_or_else(|| anyhow::anyhow!("Content type '{}' not found in module definition", local_content.content_type))?;
+                
+                match module_client.get_object_by_id(content_def, &local_content.id).await {
                     Ok(remote_content) => {
                         // Use logical comparison (excludes metadata for accurate functional comparison)
                         match yaml_parser.objects_are_logically_equal(&local_content, &remote_content) {
                             Ok(are_equal) => {
                                 if !are_equal {
                                     differences_found = true;
-                                    println!("DIFF: {} (local differs from remote)", file_path);
+                                    println!("DIFF: {file_path} (local differs from remote)");
                                     
                                     // Show a detailed summary of what actually differs
                                     show_object_differences(&yaml_parser, &local_content, &remote_content);
@@ -190,42 +248,57 @@ async fn handle_xsiam_command(command: XsiamCommands) -> Result<()> {
                             }
                             Err(e) => {
                                 differences_found = true;
-                                println!("WARNING: {} (comparison failed: {})", file_path, e);
+                                println!("WARNING: {file_path} (comparison failed: {e})");
                                 // Fallback to struct comparison if serialisation fails
                                 if local_content != remote_content {
-                                    println!("DIFF: {} (local differs from remote - fallback comparison)", file_path);
+                                    println!("DIFF: {file_path} (local differs from remote - fallback comparison)");
                                 }
                             }
                         }
                     }
                     Err(_) => {
                         differences_found = true;
-                        println!("NEW: {} (exists locally but not remotely)", file_path);
+                        println!("NEW: {file_path} (exists locally but not remotely)");
                     }
                 }
             }
             
             // Provide feedback when no differences are found
             if !differences_found {
-                println!("✓ No differences detected - local YAML files match remote XSIAM objects");
+                println!("No differences detected - local YAML files match remote {} objects", module_id.to_uppercase());
             }
         }
-        XsiamCommands::Test { instance } => {
+        ModuleCommands::Test { instance } => {
             let instance_name = instance.unwrap_or_else(|| "default".to_string());
             
             let config_manager = ConfigManager::new();
-            let test_config = match config_manager.load_instance_config(&instance_name) {
-                Ok(config) => config,
+            let module_config = match config_manager.load_module_config(&instance_name, module_id) {
+                Ok(config) => {
+                    // Check if module is enabled
+                    if !config.enabled {
+                        println!("Module '{module_id}' is disabled in instance '{instance_name}'. Enable it in config.toml to use this command.");
+                        return Ok(());
+                    }
+                    config
+                },
                 Err(_) => {
-                    println!("Instance '{}' not found. Trying environment variables...", instance_name);
+                    println!("Module '{module_id}' configuration not found for instance '{instance_name}'. Trying environment variables...");
                     
                     // Fallback to environment variables if instance config doesn't exist
                     match ConfigManager::create_test_config() {
-                        Ok(config) => config,
+                        Ok(config) => {
+                            // Convert XsiamConfig to ModuleConfig
+                            crate::config::ModuleConfig {
+                                enabled: true,
+                                fqdn: config.fqdn,
+                                api_key: config.api_key,
+                                api_key_id: config.api_key_id,
+                            }
+                        }
                         Err(e) => {
-                            println!("✗ Configuration error: {}", e);
+                            println!("ERROR: Configuration error: {e}");
                             println!("\nTo fix this, either:");
-                            println!("  1. Create an instance: gcgit init --instance {}", instance_name);
+                            println!("  1. Create an instance: gcgit init --instance {instance_name}");
                             println!("  2. Set environment variables: XSIAM_FQDN, XSIAM_API_KEY, XSIAM_API_KEY_ID");
                             return Ok(());
                         }
@@ -233,21 +306,58 @@ async fn handle_xsiam_command(command: XsiamCommands) -> Result<()> {
                 }
             };
             
-            let xsiam_client = XsiamClient::new(test_config);
+            let module_client = api::ModuleClient::new(module_config, module.base_api_path());
             
-            // Run comprehensive endpoint testing
-            match xsiam_client.test_all_endpoints().await {
+            println!("Testing {} API connectivity...\n", module_id.to_uppercase());
+            
+            // Test connectivity
+            match module_client.test_connectivity().await {
                 Ok(_) => {
-                    println!("\n✓ Endpoint testing completed successfully");
+                    println!("API connectivity test successful");
+                    
+                    // Test each content type endpoint
+                    let content_types = module.content_types();
+                    let mut successful_endpoints = 0;
+                    let total_endpoints = content_types.len();
+                    
+                    for content_def in content_types {
+                        print!("Testing {:<25} ", format!("{}:", content_def.name));
+                        
+                        match module_client.pull_content_type(&content_def).await {
+                            Ok(objects) => {
+                                println!("OK ({} items)", objects.len());
+                                successful_endpoints += 1;
+                            }
+                            Err(e) => {
+                                println!("FAILED: {e}");
+                            }
+                        }
+                    }
+                    
+                    println!("\n{successful_endpoints}/{total_endpoints} endpoints available");
+                    
+                    if successful_endpoints == total_endpoints {
+                        println!("All {} module endpoints are operational", module_id.to_uppercase());
+                    } else if successful_endpoints > 0 {
+                        println!("WARNING: Some endpoints unavailable (this may be normal depending on your licence)");
+                    } else {
+                        println!("ERROR: No endpoints available - check your configuration");
+                    }
                 }
                 Err(e) => {
-                    println!("\n✗ Endpoint testing failed: {}", e);
+                    println!("\nERROR: API connectivity test failed: {e}");
                 }
             }
         }
-        XsiamCommands::Delete { instance: _, content_type: _, id: _ } => {
-            println!("This command did not run as the feature is still under development, keep an eye on https://gocortex.io for updates");
-            return Ok(());
+        ModuleCommands::Delete { instance: _, content_type: _, id: _ } => {
+            let module_upper = module_id.to_uppercase();
+            eprintln!("ERROR: Feature not yet available");
+            eprintln!();
+            eprintln!("Usage: gcgit {module_id} delete --instance <NAME> --content-type <TYPE> --id <ID>");
+            eprintln!();
+            eprintln!("Delete operations for {module_upper} are still under development.");
+            eprintln!("Visit https://gocortex.io for updates on feature availability.");
+            std::process::exit(1);
         }
     }
     
@@ -258,8 +368,10 @@ async fn handle_init_command(instance: String) -> Result<()> {
     let config_manager = ConfigManager::new();
     config_manager.init_instance(&instance)?;
     
-    println!("Initialised instance: {}", instance);
-    println!("Please edit {}/config.toml with your XSIAM API credentials", instance);
+    println!("Initialised instance: {instance}");
+    println!("Please edit {instance}/config.toml with your API credentials");
+    println!("  Configure modules.xsiam for XSIAM platform access");
+    println!("  Configure modules.appsec for Application Security platform access");
     
     Ok(())
 }
@@ -269,7 +381,7 @@ async fn handle_status_command(instance: Option<String>) -> Result<()> {
     
     match instance {
         Some(instance_name) => {
-            println!("Status for instance: {}", instance_name);
+            println!("Status for instance: {instance_name}");
             show_instance_status(&config_manager, &instance_name).await?;
         }
         None => {
@@ -277,7 +389,7 @@ async fn handle_status_command(instance: Option<String>) -> Result<()> {
             // Get all instance directories
             let instances = get_all_instances()?;
             for instance_name in instances {
-                println!("\n=== {} ===", instance_name);
+                println!("\n=== {instance_name} ===");
                 show_instance_status(&config_manager, &instance_name).await?;
             }
         }
@@ -288,20 +400,39 @@ async fn handle_status_command(instance: Option<String>) -> Result<()> {
 
 async fn handle_validate_command(instance: Option<String>, files: Vec<String>) -> Result<()> {
     let yaml_parser = YamlParser::new();
-    let registry = ContentTypeRegistry::new();
+    let module_registry = ModuleRegistry::load();
+    
+    // Collect all content type names from all modules for validation
+    let all_content_types: Vec<&str> = module_registry.all_modules()
+        .iter()
+        .flat_map(|module| module.content_types())
+        .map(|ct| ct.name)
+        .collect();
     
     // Determine files to validate
     let files_to_validate = if !files.is_empty() {
         files
     } else if let Some(instance_name) = &instance {
-        // Get all YAML files in the specified instance
-        yaml_parser.get_local_files(instance_name)?
+        // Get all YAML files in the specified instance across all modules
+        let mut instance_files = Vec::new();
+        for module in module_registry.all_modules() {
+            let module_dir = format!("{}/{}", instance_name, module.id());
+            if let Ok(files) = yaml_parser.get_local_files(&module_dir, &all_content_types) {
+                instance_files.extend(files);
+            }
+        }
+        instance_files
     } else {
         // Get all YAML files in all instances
         let instances = get_all_instances()?;
         let mut all_files = Vec::new();
         for inst in instances {
-            all_files.extend(yaml_parser.get_local_files(&inst)?);
+            for module in module_registry.all_modules() {
+                let module_dir = format!("{}/{}", inst, module.id());
+                if let Ok(files) = yaml_parser.get_local_files(&module_dir, &all_content_types) {
+                    all_files.extend(files);
+                }
+            }
         }
         all_files
     };
@@ -315,34 +446,30 @@ async fn handle_validate_command(instance: Option<String>, files: Vec<String>) -
     let mut validation_errors = 0;
     
     for file_path in files_to_validate {
-        print!("  Checking {}... ", file_path);
+        print!("  Checking {file_path}... ");
         
         match yaml_parser.parse_file(&file_path) {
             Ok(xsiam_object) => {
-                // Validate content type is supported
-                match registry.validate_content_type(&xsiam_object.content_type) {
-                    Ok(_) => {
-                        // Additional validation could go here (e.g., required fields)
-                        println!("✓ Valid");
-                    }
-                    Err(e) => {
-                        println!("✗ {}", e);
-                        validation_errors += 1;
-                    }
+                // Validate content type is supported by checking against all registered modules
+                if all_content_types.contains(&xsiam_object.content_type.as_str()) {
+                    println!("Valid");
+                } else {
+                    println!("INVALID: Unsupported content type: {}", xsiam_object.content_type);
+                    validation_errors += 1;
                 }
             }
             Err(e) => {
-                println!("✗ {}", e);
+                println!("ERROR: {e}");
                 validation_errors += 1;
             }
         }
     }
     
     if validation_errors > 0 {
-        println!("\n{} validation errors found", validation_errors);
+        println!("\n{validation_errors} validation errors found");
         return Err(anyhow::anyhow!("Validation failed"));
     } else {
-        println!("\n✓ All files are valid");
+        println!("\nAll files are valid");
     }
     
     Ok(())
@@ -351,7 +478,7 @@ async fn handle_validate_command(instance: Option<String>, files: Vec<String>) -
 async fn show_instance_status(config_manager: &ConfigManager, instance_name: &str) -> Result<()> {
     // Check if instance exists
     if !std::path::Path::new(instance_name).exists() {
-        println!("  Instance '{}' not found", instance_name);
+        println!("  Instance '{instance_name}' not found");
         return Ok(());
     }
     
@@ -365,25 +492,36 @@ async fn show_instance_status(config_manager: &ConfigManager, instance_name: &st
             } else {
                 println!("  Git: {} modified files", modified_files.len());
                 for file in &modified_files {
-                    println!("    - {}", file);
+                    println!("    - {file}");
                 }
             }
         }
         Err(_) => {
-            println!("  Git: No repository (run gcgit xsiam pull to initialise)");
+            println!("  Git: No repository (run gcgit pull to initialise)");
         }
     }
     
-    // XSIAM connectivity status
-    match config_manager.load_instance_config(instance_name) {
-        Ok(instance_config) => {
-            let xsiam_client = XsiamClient::new(instance_config);
-            match xsiam_client.test_connectivity().await {
-                Ok(_) => println!("  XSIAM: Connected"),
-                Err(e) => println!("  XSIAM: Connection failed - {}", e),
+    // Module connectivity status - check all enabled modules dynamically
+    let module_registry = crate::modules::ModuleRegistry::load();
+    for module in module_registry.all_modules() {
+        let module_id = module.id();
+        
+        match config_manager.load_module_config(instance_name, module_id) {
+            Ok(module_config) => {
+                if module_config.enabled {
+                    let module_client = api::ModuleClient::new(module_config, module.base_api_path());
+                    match module_client.test_connectivity().await {
+                        Ok(_) => println!("  {}: Connected", module_id.to_uppercase()),
+                        Err(e) => println!("  {}: Connection failed - {e}", module_id.to_uppercase()),
+                    }
+                } else {
+                    println!("  {}: Disabled", module_id.to_uppercase());
+                }
+            }
+            Err(_) => {
+                // Module not configured - skip silently
             }
         }
-        Err(_) => println!("  XSIAM: Configuration not found"),
     }
     
     Ok(())
@@ -425,9 +563,11 @@ fn show_object_differences(yaml_parser: &YamlParser, local: &XsiamObject, remote
             differences.push(format!("  → ID: '{}' → '{}'", local.id, remote.id));
         }
         if local.name != remote.name {
+            let local_name = local.name.as_deref().unwrap_or(&local.id);
+            let remote_name = remote.name.as_deref().unwrap_or(&remote.id);
             differences.push(format!("  → Name: '{}' → '{}'", 
-                truncate_string(&local.name, 30), 
-                truncate_string(&remote.name, 30)));
+                truncate_string(local_name, 30), 
+                truncate_string(remote_name, 30)));
         }
         if local.description != remote.description {
             differences.push(format!("  → Description: {} chars → {} chars", 
@@ -446,7 +586,7 @@ fn show_object_differences(yaml_parser: &YamlParser, local: &XsiamObject, remote
             println!("  → No functional differences detected (metadata-only changes)");
         } else {
             for diff in &differences {
-                println!("{}", diff);
+                println!("{diff}");
             }
             
             // Show helpful action suggestions

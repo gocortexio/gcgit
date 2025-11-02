@@ -5,6 +5,10 @@ use std::path::Path;
 use std::env;
 use crate::git_wrapper::GitWrapper;
 
+// Re-export ModuleConfig for public use
+pub use crate::modules::ModuleConfig;
+
+// Legacy XSIAM-only config for backwards compatibility
 #[derive(Debug, Deserialize, Serialize)]
 pub struct XsiamConfig {
     pub fqdn: String,
@@ -13,9 +17,33 @@ pub struct XsiamConfig {
     pub instance_name: String,
 }
 
+// Multi-module configuration format (v2.0+)
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ModulesConfig {
+    pub xsiam: Option<ModuleConfigData>,
+    pub appsec: Option<ModuleConfigData>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ModuleConfigData {
+    pub enabled: Option<bool>,
+    pub fqdn: String,
+    pub api_key: String,
+    pub api_key_id: String,
+}
+
+// Combined config file format supporting both legacy and multi-module
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ConfigFile {
-    pub xsiam: XsiamConfig,
+    pub instance_name: String,
+    
+    // Legacy single-module format
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xsiam: Option<XsiamConfig>,
+    
+    // New multi-module format (v2.0+)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modules: Option<ModulesConfig>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -30,8 +58,9 @@ impl ConfigManager {
         Self
     }
 
-    pub fn load_instance_config(&self, instance_name: &str) -> Result<XsiamConfig> {
-        let config_path = format!("{}/config.toml", instance_name);
+    // Load configuration for a specific module in an instance
+    pub fn load_module_config(&self, instance_name: &str, module_id: &str) -> Result<ModuleConfig> {
+        let config_path = format!("{instance_name}/config.toml");
         
         if !Path::new(&config_path).exists() {
             return Err(anyhow::anyhow!(
@@ -42,18 +71,46 @@ impl ConfigManager {
         }
 
         let config_content = fs::read_to_string(&config_path)
-            .with_context(|| format!("Failed to read config file: {}", config_path))?;
+            .with_context(|| format!("Failed to read config file: {config_path}"))?;
 
         let config: ConfigFile = toml::from_str(&config_content)
-            .with_context(|| format!("Failed to parse config file: {}", config_path))?;
+            .with_context(|| format!("Failed to parse config file: {config_path}"))?;
 
-        // Expand environment variables in the configuration
-        let mut xsiam_config = config.xsiam;
-        xsiam_config.fqdn = expand_env_vars(&xsiam_config.fqdn)?;
-        xsiam_config.api_key = expand_env_vars(&xsiam_config.api_key)?;
-        xsiam_config.api_key_id = expand_env_vars(&xsiam_config.api_key_id)?;
-
-        Ok(xsiam_config)
+        // Try new multi-module format first
+        if let Some(modules) = &config.modules {
+            let module_data = match module_id {
+                "xsiam" => modules.xsiam.as_ref(),
+                "appsec" => modules.appsec.as_ref(),
+                _ => None,
+            };
+            
+            if let Some(data) = module_data {
+                return Ok(ModuleConfig {
+                    enabled: data.enabled.unwrap_or(true),
+                    fqdn: expand_env_vars(&data.fqdn)?,
+                    api_key: expand_env_vars(&data.api_key)?,
+                    api_key_id: expand_env_vars(&data.api_key_id)?,
+                });
+            }
+        }
+        
+        // Fall back to legacy format for XSIAM only
+        if module_id == "xsiam" {
+            if let Some(xsiam) = &config.xsiam {
+                return Ok(ModuleConfig {
+                    enabled: true,
+                    fqdn: expand_env_vars(&xsiam.fqdn)?,
+                    api_key: expand_env_vars(&xsiam.api_key)?,
+                    api_key_id: expand_env_vars(&xsiam.api_key_id)?,
+                });
+            }
+        }
+        
+        Err(anyhow::anyhow!(
+            "Module '{}' not configured in instance '{}'",
+            module_id,
+            instance_name
+        ))
     }
 
     #[allow(dead_code)]
@@ -67,44 +124,14 @@ impl ConfigManager {
         }
 
         let config_content = fs::read_to_string(config_path)
-            .with_context(|| format!("Failed to read global config file: {}", config_path))?;
+            .with_context(|| format!("Failed to read global config file: {config_path}"))?;
 
         let config: GlobalConfig = toml::from_str(&config_content)
-            .with_context(|| format!("Failed to parse global config file: {}", config_path))?;
+            .with_context(|| format!("Failed to parse global config file: {config_path}"))?;
 
         Ok(config)
     }
 
-    #[allow(dead_code)]
-    pub fn create_instance_structure(&self, instance_name: &str) -> Result<()> {
-        // Create the instance directory structure
-        fs::create_dir_all(&instance_name)
-            .with_context(|| format!("Failed to create instance directory: {}", instance_name))?;
-        
-        // Create subdirectories for different content types
-        let registry = crate::content_types::ContentTypeRegistry::new();
-        let subdirs = registry.get_all_types();
-        for subdir in &subdirs {
-            fs::create_dir_all(format!("{}/{}", instance_name, subdir))
-                .with_context(|| format!("Failed to create subdirectory: {}/{}", instance_name, subdir))?;
-        }
-
-
-
-        // Create config.toml template
-        let config_template = r#"[xsiam]
-fqdn = "api-myinstance.xdr.au.paloaltonetworks.com"
-api_key = "PASTE_YOUR_API_KEY"
-api_key_id = "PASTE_YOUR_API_KEY_ID"
-instance_name = "{}"
-"#;
-
-        let config_content = config_template.replace("{}", instance_name);
-        fs::write(format!("{}/config.toml", instance_name), config_content)
-            .with_context(|| format!("Failed to create config.toml for instance: {}", instance_name))?;
-
-        Ok(())
-    }
 
 
     pub fn create_test_config() -> Result<XsiamConfig> {
@@ -126,43 +153,59 @@ instance_name = "{}"
     pub fn init_instance(&self, instance_name: &str) -> Result<()> {
         // Create instance directory
         fs::create_dir_all(instance_name)
-            .with_context(|| format!("Failed to create instance directory: {}", instance_name))?;
+            .with_context(|| format!("Failed to create instance directory: {instance_name}"))?;
 
-        // Create subdirectories using content type registry
-        let registry = crate::content_types::ContentTypeRegistry::new();
-        let subdirs = registry.get_all_types();
-        for subdir in subdirs {
-            let path = format!("{}/{}", instance_name, subdir);
-            fs::create_dir_all(&path)
-                .with_context(|| format!("Failed to create subdirectory: {}", path))?;
+        // Create module subdirectories using module registry
+        let module_registry = crate::modules::ModuleRegistry::load();
+        for module in module_registry.all_modules() {
+            let module_path = format!("{}/{}", instance_name, module.id());
+            fs::create_dir_all(&module_path)
+                .with_context(|| format!("Failed to create module directory: {module_path}"))?;
+            
+            // Create content type subdirectories within each module
+            for content_type in module.content_types() {
+                let content_path = format!("{}/{}", module_path, content_type.name);
+                fs::create_dir_all(&content_path)
+                    .with_context(|| format!("Failed to create content type directory: {content_path}"))?;
+            }
         }
 
-        // Create config.toml template
+        // Create config.toml template with multi-module format (v2.0+)
         let config_template = ConfigFile {
-            xsiam: XsiamConfig {
-                fqdn: "api-myinstance.xdr.au.paloaltonetworks.com".to_string(),
-                api_key: "PASTE_YOUR_API_KEY".to_string(),
-                api_key_id: "PASTE_YOUR_API_KEY_ID".to_string(),
-                instance_name: instance_name.to_string(),
-            },
+            instance_name: instance_name.to_string(),
+            xsiam: None,  // Use new modules format instead
+            modules: Some(ModulesConfig {
+                xsiam: Some(ModuleConfigData {
+                    enabled: Some(true),
+                    fqdn: "${XSIAM_FQDN}".to_string(),
+                    api_key: "${XSIAM_API_KEY}".to_string(),
+                    api_key_id: "${XSIAM_API_KEY_ID}".to_string(),
+                }),
+                appsec: Some(ModuleConfigData {
+                    enabled: Some(true),
+                    fqdn: "${XSIAM_FQDN}".to_string(),  // Often same as XSIAM
+                    api_key: "${XSIAM_API_KEY}".to_string(),
+                    api_key_id: "${XSIAM_API_KEY_ID}".to_string(),
+                }),
+            }),
         };
 
         let config_content = toml::to_string_pretty(&config_template)
             .context("Failed to serialize config template")?;
 
-        let config_path = format!("{}/config.toml", instance_name);
+        let config_path = format!("{instance_name}/config.toml");
         fs::write(&config_path, config_content)
-            .with_context(|| format!("Failed to write config file: {}", config_path))?;
+            .with_context(|| format!("Failed to write config file: {config_path}"))?;
 
         // Initialise git repository
         let _git_repo = GitWrapper::new(instance_name)
-            .with_context(|| format!("Failed to initialise git repository in: {}", instance_name))?;
+            .with_context(|| format!("Failed to initialise git repository in: {instance_name}"))?;
 
         // Create .gitignore file to exclude config.toml from version control
-        let gitignore_path = format!("{}/.gitignore", instance_name);
+        let gitignore_path = format!("{instance_name}/.gitignore");
         let gitignore_content = "*.toml\n";
         fs::write(&gitignore_path, gitignore_content)
-            .with_context(|| format!("Failed to create .gitignore file: {}", gitignore_path))?;
+            .with_context(|| format!("Failed to create .gitignore file: {gitignore_path}"))?;
 
         Ok(())
     }
@@ -172,7 +215,7 @@ instance_name = "{}"
 fn expand_env_vars(input: &str) -> Result<String> {
     if input.starts_with("${") && input.ends_with("}") {
         let var_name = &input[2..input.len()-1];
-        env::var(var_name).with_context(|| format!("Environment variable {} not set", var_name))
+        env::var(var_name).with_context(|| format!("Environment variable {var_name} not set"))
     } else {
         Ok(input.to_string())
     }

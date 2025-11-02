@@ -2,9 +2,9 @@ use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "gcgit")]
-#[command(about = "A Rust-based CLI tool for version-controlling Cortex XSIAM configurations.\nSynchronise YAML-based configuration files between local Git repositories and Cortex XSIAM instances.\n\nhttps://gocortex.io")]
+#[command(about = "A Rust-based CLI tool for version-controlling Cortex platform configurations (XSIAM, AppSec).\nSynchronise YAML-based configuration files between local Git repositories and Cortex instances.\n\nhttps://gocortex.io")]
 #[command(version = env!("CARGO_PKG_VERSION"))]
-#[command(long_about = concat!("A Rust-based CLI tool for version-controlling Cortex XSIAM configurations.\nSynchronise YAML-based configuration files between local Git repositories and Cortex XSIAM instances.\n\nhttps://gocortex.io\n\nVersion: ", env!("CARGO_PKG_VERSION")))]
+#[command(long_about = concat!("A Rust-based CLI tool for version-controlling Cortex platform configurations.\nSupports multiple Cortex modules: XSIAM, Application Security.\n\nhttps://gocortex.io\n\nVersion: ", env!("CARGO_PKG_VERSION")))]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -12,24 +12,29 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// XSIAM-related commands
+    /// XSIAM module commands (scripts, dashboards, biocs, correlation searches, widgets, authentication settings)
     Xsiam {
         #[command(subcommand)]
-        command: XsiamCommands,
+        command: ModuleCommands,
     },
-    /// Initialise a new instance
+    /// AppSec module commands (applications, policies, rules, repositories, integrations)
+    Appsec {
+        #[command(subcommand)]
+        command: ModuleCommands,
+    },
+    /// Initialise a new multi-module instance
     Init {
         /// Instance name
         #[arg(long)]
         instance: String,
     },
-    /// Show Git and XSIAM synchronisation status
+    /// Show Git and module synchronisation status
     Status {
         /// Instance name to check (optional - shows all if not specified)
         #[arg(long)]
         instance: Option<String>,
     },
-    /// Streamlined deployment: validate + add + commit + push to XSIAM
+    /// Streamlined deployment: validate + add + commit + push to platform
     Deploy {
         /// Instance name to deploy
         #[arg(long)]
@@ -40,7 +45,7 @@ pub enum Commands {
         /// Files to add and commit (if not specified, adds all modified YAML files in instance)
         files: Vec<String>,
     },
-    /// Validate YAML files for XSIAM compatibility
+    /// Validate YAML files for platform compatibility
     Validate {
         /// Instance name to validate
         #[arg(long)]
@@ -50,15 +55,16 @@ pub enum Commands {
     },
 }
 
+// Generic module commands that work across all modules
 #[derive(Subcommand)]
-pub enum XsiamCommands {
-    /// Push local changes to XSIAM
+pub enum ModuleCommands {
+    /// Push local changes to the platform
     Push {
         /// Instance name
         #[arg(long)]
         instance: Option<String>,
     },
-    /// Pull configurations from XSIAM
+    /// Pull configurations from the platform
     Pull {
         /// Instance name
         #[arg(long)]
@@ -76,12 +82,12 @@ pub enum XsiamCommands {
         #[arg(long)]
         instance: Option<String>,
     },
-    /// Delete an object from XSIAM
+    /// Delete an object from the platform
     Delete {
         /// Instance name
         #[arg(long)]
         instance: Option<String>,
-        /// Content type (biocs, correlation_searches, dashboards)
+        /// Content type
         #[arg(long)]
         content_type: String,
         /// Object ID to delete

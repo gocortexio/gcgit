@@ -7,7 +7,8 @@ use chrono::{DateTime, Utc};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct XsiamObject {
     pub id: String,
-    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub description: String,
     pub content_type: String,
     pub metadata: ObjectMetadata,
@@ -48,7 +49,7 @@ impl XsiamObject {
     pub fn new(id: String, name: String, content_type: String) -> Self {
         Self {
             id,
-            name,
+            name: Some(name),
             description: String::new(),
             content_type,
             metadata: ObjectMetadata::default(),
@@ -113,15 +114,13 @@ impl XsiamObject {
                     .and_then(|v| v.as_str())
                     .or_else(|| json.get("name").and_then(|v| v.as_str()))
                     .or_else(|| json.get("widget_name").and_then(|v| v.as_str()))
-                    .unwrap_or_default()
-                    .to_string()
+                    .map(|s| s.to_string())
             }
             "dashboards" => {
                 // For dashboards, use 'name' field as specified: dashboards_data.0.name
                 json.get("name")
                     .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string()
+                    .map(|s| s.to_string())
             }
             "authentication_settings" => {
                 // For authentication settings, use 'name' or 'setting_name' field
@@ -129,14 +128,12 @@ impl XsiamObject {
                     .and_then(|v| v.as_str())
                     .or_else(|| json.get("setting_name").and_then(|v| v.as_str()))
                     .or_else(|| json.get("type").and_then(|v| v.as_str()))
-                    .unwrap_or_default()
-                    .to_string()
+                    .map(|s| s.to_string())
             }
             _ => {
                 json.get("name")
                     .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string()
+                    .map(|s| s.to_string())
             }
         };
 
@@ -183,11 +180,7 @@ impl XsiamObject {
                 .and_then(|v| {
                     if let Some(s) = v.as_str() {
                         Some(s.to_string())
-                    } else if let Some(i) = v.as_i64() {
-                        Some(i.to_string())
-                    } else {
-                        None
-                    }
+                    } else { v.as_i64().map(|i| i.to_string()) }
                 })
         } else {
             None
@@ -254,7 +247,9 @@ impl XsiamObject {
         let mut payload = serde_json::Map::new();
         
         payload.insert("id".to_string(), Value::String(self.id.clone()));
-        payload.insert("name".to_string(), Value::String(self.name.clone()));
+        if let Some(name) = &self.name {
+            payload.insert("name".to_string(), Value::String(name.clone()));
+        }
         payload.insert("description".to_string(), Value::String(self.description.clone()));
         
         // Add metadata

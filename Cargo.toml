@@ -1,8 +1,8 @@
 [package]
 name = "gcgit"
-version = "1.1.0"
+version = "2.1.8"
 edition = "2021"
-description = "A Rust-based CLI tool for version-controlling Cortex XSIAM configurations"
+description = "A Rust-based CLI tool for version-controlling Cortex platform configurations (XSIAM, AppSec)"
 authors = ["gcgit team"]
 license = "MIT"
 repository = "https://github.com/example/gcgit"
@@ -26,3 +26,4 @@ tokio = { version = "1.47", features = ["full"] }
 anyhow = "1.0"
 uuid = { version = "1.0", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
+zip = "2.1"

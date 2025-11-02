@@ -30,6 +30,8 @@ impl GitWrapper {
         Ok(Self { repo })
     }
 
+    // Future diff/push features - detect changes from main branch
+    #[allow(dead_code)]
     pub fn get_changed_files_from_main(&self) -> Result<Vec<String>> {
         let mut changed_files = Vec::new();
 
@@ -87,6 +89,8 @@ impl GitWrapper {
         Ok(changed_files)
     }
 
+    // Future diff feature - check if file was deleted
+    #[allow(dead_code)]
     pub fn is_file_deleted(&self, file_path: &str) -> Result<bool> {
         let mut status_options = StatusOptions::new();
         status_options.pathspec(file_path);
@@ -190,7 +194,7 @@ impl GitWrapper {
 
         for file in files {
             index.add_path(std::path::Path::new(file))
-                .with_context(|| format!("Failed to add file to index: {}", file))?;
+                .with_context(|| format!("Failed to add file to index: {file}"))?;
         }
 
         index.write()
@@ -255,7 +259,7 @@ impl GitWrapper {
         let mut modified_files = Vec::new();
 
         for (path, status) in statuses {
-            if path.starts_with(&format!("{}/", instance_name)) && 
+            if path.starts_with(&format!("{instance_name}/")) && 
                (path.ends_with(".yaml") || path.ends_with(".yml")) &&
                (status.contains(Status::WT_MODIFIED) || 
                 status.contains(Status::WT_NEW) || 

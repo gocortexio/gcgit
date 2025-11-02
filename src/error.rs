@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::fmt;
 
 #[derive(Debug)]
+#[allow(clippy::enum_variant_names)]
 pub enum GcgitError {
     GitError(String),
     ConfigError(String),
@@ -15,12 +16,12 @@ pub enum GcgitError {
 impl fmt::Display for GcgitError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            GcgitError::GitError(msg) => write!(f, "Git error: {}", msg),
-            GcgitError::ConfigError(msg) => write!(f, "Configuration error: {}", msg),
-            GcgitError::ApiError(msg) => write!(f, "API error: {}", msg),
-            GcgitError::ParseError(msg) => write!(f, "Parse error: {}", msg),
-            GcgitError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
-            GcgitError::FileSystemError(msg) => write!(f, "File system error: {}", msg),
+            GcgitError::GitError(msg) => write!(f, "Git error: {msg}"),
+            GcgitError::ConfigError(msg) => write!(f, "Configuration error: {msg}"),
+            GcgitError::ApiError(msg) => write!(f, "API error: {msg}"),
+            GcgitError::ParseError(msg) => write!(f, "Parse error: {msg}"),
+            GcgitError::ValidationError(msg) => write!(f, "Validation error: {msg}"),
+            GcgitError::FileSystemError(msg) => write!(f, "File system error: {msg}"),
         }
     }
 }

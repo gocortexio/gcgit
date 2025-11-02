@@ -13,10 +13,10 @@ impl YamlParser {
 
     pub fn parse_file(&self, file_path: &str) -> Result<XsiamObject> {
         let content = fs::read_to_string(file_path)
-            .with_context(|| format!("Failed to read file: {}", file_path))?;
+            .with_context(|| format!("Failed to read file: {file_path}"))?;
 
         let mut object: XsiamObject = serde_yaml::from_str(&content)
-            .with_context(|| format!("Failed to parse YAML file: {}", file_path))?;
+            .with_context(|| format!("Failed to parse YAML file: {file_path}"))?;
 
         // Infer content type from file path if not specified
         if object.content_type.is_empty() {
@@ -38,10 +38,10 @@ impl YamlParser {
 
         // Create a deterministic YAML output with consistent field ordering
         let yaml_content = self.serialize_object_deterministically(object)
-            .with_context(|| format!("Failed to serialize object to YAML"))?;
+            .with_context(|| "Failed to serialize object to YAML".to_string())?;
 
         fs::write(file_path, yaml_content)
-            .with_context(|| format!("Failed to write file: {}", file_path))?;
+            .with_context(|| format!("Failed to write file: {file_path}"))?;
 
         Ok(())
     }
@@ -53,7 +53,9 @@ impl YamlParser {
         
         // Add fields in a specific order to ensure consistency
         yaml_map.insert(YamlValue::String("id".to_string()), YamlValue::String(object.id.clone()));
-        yaml_map.insert(YamlValue::String("name".to_string()), YamlValue::String(object.name.clone()));
+        if let Some(name) = &object.name {
+            yaml_map.insert(YamlValue::String("name".to_string()), YamlValue::String(name.clone()));
+        }
         yaml_map.insert(YamlValue::String("description".to_string()), YamlValue::String(object.description.clone()));
         yaml_map.insert(YamlValue::String("content_type".to_string()), YamlValue::String(object.content_type.clone()));
         
@@ -61,7 +63,11 @@ impl YamlParser {
         let metadata_yaml = serde_yaml::to_value(&object.metadata)?;
         yaml_map.insert(YamlValue::String("metadata".to_string()), metadata_yaml);
         
-        // Sort content HashMap keys for consistent ordering
+        // Sort content HashMap keys alphabetically for deterministic YAML output
+        // Known limitation: If the API changes the order of fields returned, Git will show
+        // spurious diffs. However, since we control the serialisation, alphabetical sorting
+        // ensures our YAML output is always consistent, preventing false positives in Git diffs.
+        // This trade-off is acceptable as we prioritise stable version control over mirroring API field order.
         let mut sorted_keys: Vec<_> = object.content.keys().collect();
         sorted_keys.sort();
         
@@ -134,19 +140,21 @@ impl YamlParser {
             .with_context(|| "Failed to convert content to YAML string")
     }
 
-    pub fn get_local_files(&self, instance_name: &str) -> Result<Vec<String>> {
+    /// Get all local YAML files for specific content types in a module directory
+    /// 
+    /// # Arguments
+    /// * `module_dir` - Path to module directory (e.g., "instance/xsiam" or "instance/appsec")
+    /// * `content_type_names` - List of content type subdirectory names to search
+    pub fn get_local_files(&self, module_dir: &str, content_type_names: &[&str]) -> Result<Vec<String>> {
         let mut files = Vec::new();
         
-        let instance_path = Path::new(instance_name);
-        if !instance_path.exists() {
+        let module_path = Path::new(module_dir);
+        if !module_path.exists() {
             return Ok(files);
         }
-
-        let registry = crate::content_types::ContentTypeRegistry::new();
-        let content_types = registry.get_all_types();
         
-        for content_type in content_types {
-            let type_path = instance_path.join(content_type);
+        for content_type in content_type_names {
+            let type_path = module_path.join(content_type);
             if type_path.exists() {
                 let entries = fs::read_dir(&type_path)
                     .with_context(|| format!("Failed to read directory: {}", type_path.display()))?;
@@ -155,7 +163,7 @@ impl YamlParser {
                     let entry = entry.context("Failed to read directory entry")?;
                     let path = entry.path();
                     
-                    if path.extension().map_or(false, |ext| ext == "yaml" || ext == "yml") {
+                    if path.extension().is_some_and(|ext| ext == "yaml" || ext == "yml") {
                         if let Some(path_str) = path.to_str() {
                             files.push(path_str.to_string());
                         }
@@ -173,11 +181,9 @@ impl YamlParser {
         if let Some(parent) = path.parent() {
             if let Some(parent_name) = parent.file_name() {
                 if let Some(parent_str) = parent_name.to_str() {
-                    // Use content type registry to validate
-                    let registry = crate::content_types::ContentTypeRegistry::new();
-                    if registry.is_supported(parent_str) {
-                        return Ok(parent_str.to_string());
-                    }
+                    // Return the parent directory name as content type
+                    // In our structure: instance/module/content_type/file.yaml
+                    return Ok(parent_str.to_string());
                 }
             }
         }
@@ -190,20 +196,16 @@ impl YamlParser {
             return Err(anyhow::anyhow!("Object ID is required"));
         }
 
-        if object.name.is_empty() {
-            return Err(anyhow::anyhow!("Object name is required"));
-        }
+        // Name is now optional - some AppSec objects don't have names
+        // Validation removed to support schema-compliant API responses
 
         if object.content_type.is_empty() {
             return Err(anyhow::anyhow!("Content type is required"));
         }
 
-        // Validate content type using registry - accept both singular and plural forms
-        let registry = crate::content_types::ContentTypeRegistry::new();
-        match registry.validate_content_type(&object.content_type) {
-            Ok(_) => {},
-            Err(e) => return Err(anyhow::anyhow!("{}", e)),
-        }
+        // Content type validation removed - now module-aware via directory structure
+        // The content_type comes from the directory path (instance/module/content_type/)
+        // which is already validated by the module's content_types list
 
         Ok(())
     }
