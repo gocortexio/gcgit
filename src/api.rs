@@ -685,6 +685,9 @@ impl ModuleClient {
             PullStrategy::ZipArtifact { metadata_endpoint, download_endpoint, metadata_response_path, download_filter_field } => {
                 self.pull_zip_artifact(content_def, metadata_endpoint, download_endpoint, metadata_response_path, download_filter_field).await
             }
+            PullStrategy::ScriptCode { list_endpoint, code_endpoint, list_response_path, uid_field } => {
+                self.pull_script_code(content_def, list_endpoint, code_endpoint, list_response_path, uid_field).await
+            }
         }
     }
     
@@ -895,6 +898,131 @@ impl ModuleClient {
             .with_context(|| format!("Failed to extract YAML from artifact '{filter_value}' ZIP"))?;
         
         Ok(yaml_content)
+    }
+    
+    /// Pull script code - two-step process (list scripts + fetch code by UID)
+    async fn pull_script_code(&self, content_def: &ContentTypeDefinition, list_endpoint: &str, code_endpoint: &str, list_response_path: &str, uid_field: &str) -> Result<Vec<XsiamObject>> {
+        let list_url = format!("https://{}{}/{}", self.fqdn, self.base_api_path, list_endpoint);
+        
+        let response = self.client
+            .post(&list_url)
+            .header("x-xdr-auth-id", &self.api_key_id)
+            .header("Authorization", &self.api_key)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .json(&serde_json::json!({"request_data": {}}))
+            .send()
+            .await
+            .with_context(|| format!("Failed to send request to {list_url}"))?;
+        
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!("API request failed with status: {}", response.status()));
+        }
+        
+        let json_response: Value = response.json().await.context("Failed to parse API response as JSON")?;
+        
+        let scripts_list = self.extract_value_by_path(&json_response, list_response_path)?
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("Expected array at path {}", list_response_path))?;
+        
+        let mut script_objects = Vec::new();
+        
+        for script_meta in scripts_list {
+            let script_uid = script_meta
+                .get(uid_field)
+                .and_then(|uid| uid.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Script missing {} field", uid_field))?;
+            
+            let script_name = script_meta
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or(script_uid);
+            
+            match self.get_script_code(code_endpoint, script_uid).await {
+                Ok(script_code) => {
+                    let mut content_map = std::collections::HashMap::new();
+                    
+                    // Store the script code with newlines properly converted
+                    content_map.insert("code".to_string(), serde_json::json!(script_code));
+                    
+                    // Add all metadata fields except name, description, and uid
+                    for (key, value) in script_meta.as_object().unwrap_or(&serde_json::Map::new()) {
+                        if key != "name" && key != "description" && key != uid_field {
+                            content_map.insert(key.clone(), value.clone());
+                        }
+                    }
+                    
+                    let mut metadata = crate::types::ObjectMetadata::default();
+                    if let Some(created_by) = script_meta.get("created_by").and_then(|v| v.as_str()) {
+                        metadata.created_by = created_by.to_string();
+                    }
+                    if let Some(modification_date) = script_meta.get("modification_date").and_then(|v| v.as_i64()) {
+                        let seconds = if modification_date > 10000000000 {
+                            modification_date / 1000
+                        } else {
+                            modification_date
+                        };
+                        metadata.updated_at = chrono::DateTime::from_timestamp(seconds, 0);
+                    }
+                    
+                    let description = script_meta
+                        .get("description")
+                        .and_then(|d| d.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    
+                    let xsiam_obj = XsiamObject {
+                        id: script_uid.to_string(),
+                        name: Some(script_name.to_string()),
+                        description,
+                        content_type: content_def.name.to_string(),
+                        metadata,
+                        tenant_id: None,
+                        content: content_map,
+                    };
+                    script_objects.push(xsiam_obj);
+                }
+                Err(e) => {
+                    eprintln!("Warning: Failed to get code for script '{script_name}': {e}");
+                }
+            }
+        }
+        
+        Ok(script_objects)
+    }
+    
+    /// Get script code by UID - returns code with escaped newlines converted to actual newlines
+    async fn get_script_code(&self, code_endpoint: &str, script_uid: &str) -> Result<String> {
+        let code_url = format!("https://{}{}/{}", self.fqdn, self.base_api_path, code_endpoint);
+        
+        let response = self.client
+            .post(&code_url)
+            .header("x-xdr-auth-id", &self.api_key_id)
+            .header("Authorization", &self.api_key)
+            .header("Content-Type", "application/json")
+            .json(&serde_json::json!({
+                "request_data": {
+                    "script_uid": script_uid
+                }
+            }))
+            .send()
+            .await
+            .with_context(|| format!("Failed to get script code for UID '{script_uid}'"))?;
+        
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!("Failed to get script code for UID '{}': HTTP {}", script_uid, response.status()));
+        }
+        
+        let json: Value = response.json().await.context("Failed to parse script code response")?;
+        
+        let script_code = json.get("reply")
+            .and_then(|r| r.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Script code response missing 'reply' field"))?;
+        
+        // Convert escaped newlines (\n) to actual newlines for readability
+        let code_with_newlines = script_code.replace("\\n", "\n");
+        
+        Ok(code_with_newlines)
     }
     
     /// Extract items from JSON response using response_path

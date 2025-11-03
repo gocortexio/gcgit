@@ -1,6 +1,6 @@
 [package]
 name = "gcgit"
-version = "2.1.8"
+version = "2.1.9"
 edition = "2021"
 description = "A Rust-based CLI tool for version-controlling Cortex platform configurations (XSIAM, AppSec)"
 authors = ["gcgit team"]

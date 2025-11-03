@@ -75,12 +75,22 @@ pub enum PullStrategy {
     },
     
     /// ZIP artifact - two-step process: list metadata, then download ZIPs
-    /// Used by: XSIAM scripts (metadata list + individual ZIP downloads)
+    /// Used by: Future content types that require ZIP file downloads
+    #[allow(dead_code)]
     ZipArtifact {
         metadata_endpoint: &'static str,
         download_endpoint: &'static str,
         metadata_response_path: &'static str,
         download_filter_field: &'static str,
+    },
+    
+    /// Script code retrieval - two-step process: list scripts, then fetch code by UID
+    /// Used by: XSIAM scripts (list scripts + individual code retrieval via script_uid)
+    ScriptCode {
+        list_endpoint: &'static str,
+        code_endpoint: &'static str,
+        list_response_path: &'static str,
+        uid_field: &'static str,
     },
 }
 

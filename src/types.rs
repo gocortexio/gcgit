@@ -158,7 +158,8 @@ impl XsiamObject {
             
             metadata.updated_at = Self::extract_timestamp_from_json(json, &[
                 "modification_time", "modified_time", "updated_at", "updatedTime",
-                "last_modified", "lastModified", "date_modified", "dateModified"
+                "last_modified", "lastModified", "date_modified", "dateModified",
+                "observationTime", "lastTriggered"
             ]);
             
             // Extract version from XSIAM API - try multiple version fields

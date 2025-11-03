@@ -3,12 +3,12 @@
   
   # gcgit
   
-  ![Version](https://img.shields.io/badge/version-2.1.8-blue)
+  ![Version](https://img.shields.io/badge/version-2.1.9-blue)
   ![Rust](https://img.shields.io/badge/rust-1.70+-orange)
   
   **Version control for Cortex platform security configurations**
   
-  A Git-based workflow for managing XSIAM and Application Security configurations using YAML files and local repositories.
+  A Git-based workflow for managing Cortex XSIAM and Cortex Cloud configurations using YAML files and local repositories.
 </div>
 
 ---
@@ -30,7 +30,7 @@
 
 ## Features
 
-- **Multi-Module Support**: Manage XSIAM and Application Security from a single tool
+- **Multi-Module Support**: Manage Cortex XSIAM and Cortex Cloud from a single tool
 - **Git-Based Workflow**: Automatic commits, change tracking, and version history
 - **YAML Configuration**: Human-readable configuration files for easy editing and review
 - **Module Architecture**: Plugin-based design enabling support for additional Cortex modules
@@ -44,7 +44,7 @@ Version 2.x represents a major architectural upgrade from the v1.x single-module
 
 | v1.x | v2.x |
 |------|------|
-| XSIAM only | Multi-module (XSIAM + AppSec) |
+| Cortex XSIAM only | Multi-module (Cortex XSIAM + Cortex Cloud) |
 | Fixed content types | Extensible plugin architecture |
 | Monolithic design | Shared infrastructure with module traits |
 
@@ -52,7 +52,7 @@ Version 2.x represents a major architectural upgrade from the v1.x single-module
 
 ## Supported Modules
 
-### XSIAM Module
+### Cortex XSIAM Module
 
 Six content types for security operations:
 
@@ -65,7 +65,7 @@ Six content types for security operations:
 | `authentication_settings` | SSO and authentication configurations |
 | `scripts` | Automation scripts |
 
-### Application Security Module
+### Cortex Cloud Module
 
 Five content types for application security:
 
@@ -137,10 +137,10 @@ Environment variables are expanded automatically using `${VARIABLE}` syntax.
 **3. Pull configurations**
 
 ```bash
-# Pull from XSIAM
+# Pull from Cortex XSIAM
 gcgit xsiam pull --instance production
 
-# Pull from AppSec
+# Pull from Cortex Cloud
 gcgit appsec pull --instance production
 ```
 
@@ -183,12 +183,12 @@ Replace `<module>` with `xsiam` or `appsec`.
 **Examples:**
 
 ```bash
-# XSIAM operations
+# Cortex XSIAM operations
 gcgit xsiam pull --instance production
 gcgit xsiam diff --instance production
 gcgit xsiam test --instance production
 
-# AppSec operations
+# Cortex Cloud operations
 gcgit appsec pull --instance production
 gcgit appsec diff --instance production
 gcgit appsec test --instance production
@@ -298,14 +298,14 @@ The Git repository lives inside each instance directory, keeping everything self
 ### v1.x vs v2.x
 
 **v1.x architecture:**
-- Single module (XSIAM only)
+- Single module (Cortex XSIAM only)
 - Fixed content type list
 - Monolithic design
 
 **v2.x architecture:**
 - Module trait system with plugin support
 - Shared infrastructure (Git, API client, YAML parser)
-- Three reusable pull strategies (JsonCollection, Paginated, ZipArtifact)
+- Four reusable pull strategies (JsonCollection, Paginated, ScriptCode, ZipArtifact)
 - Self-contained modules with declarative content type definitions
 - Easy extension for future Cortex platform modules
 
@@ -336,7 +336,7 @@ The tool handles the rest: API communication, Git operations, YAML serialisation
 ### Requirements
 
 - Rust 1.70 or later
-- Cortex XSIAM and/or AppSec API access
+- Cortex XSIAM and/or Cortex Cloud API access
 - API key and key ID for each module
 
 No external Git installation required - gcgit uses libgit2 for Git operations.
@@ -370,5 +370,5 @@ gcgit validate --help
 ---
 
 <div align="center">
-  <sub>Built with Rust | Version 2.1.8</sub>
+  <sub>Built with Rust | Version 2.1.9</sub>
 </div>

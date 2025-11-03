@@ -71,19 +71,19 @@ impl Module for XsiamModule {
                 response_path: Some("reply"),
             },
             
-            // Scripts - ZIP artifacts requiring two-step retrieval
-            // Step 1: List metadata via scripts/get_scripts
-            // Step 2: Download individual ZIP files via scripts/get
+            // Scripts - Two-step code retrieval via script_uid
+            // Step 1: List scripts via scripts/get_scripts to get script_uid values
+            // Step 2: Fetch code for each script via scripts/get_script_code with script_uid
             ContentTypeDefinition {
                 name: "scripts",
                 get_endpoint: "scripts/get_scripts",
-                pull_strategy: PullStrategy::ZipArtifact {
-                    metadata_endpoint: "scripts/get_scripts",
-                    download_endpoint: "scripts/get",
-                    metadata_response_path: "reply.scripts",
-                    download_filter_field: "name",
+                pull_strategy: PullStrategy::ScriptCode {
+                    list_endpoint: "scripts/get_scripts",
+                    code_endpoint: "scripts/get_script_code",
+                    list_response_path: "reply.scripts",
+                    uid_field: "script_uid",
                 },
-                id_field: "script_id",
+                id_field: "script_uid",
                 request_body: Some(json!({"request_data": {}})),
                 response_path: None,
             },
@@ -123,16 +123,16 @@ mod tests {
     }
     
     #[test]
-    fn test_scripts_uses_zip_strategy() {
+    fn test_scripts_uses_script_code_strategy() {
         let module = XsiamModule;
         let types = module.content_types();
         
         let scripts = types.iter().find(|t| t.name == "scripts").unwrap();
         
-        // Scripts should use ZipArtifact pull strategy
+        // Scripts should use ScriptCode pull strategy
         match &scripts.pull_strategy {
-            PullStrategy::ZipArtifact { .. } => (),
-            _ => panic!("Scripts should use ZipArtifact pull strategy"),
+            PullStrategy::ScriptCode { .. } => (),
+            _ => panic!("Scripts should use ScriptCode pull strategy"),
         }
     }
 }
