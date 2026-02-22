@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: GoCortexIO
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Module system for gcgit - trait-based plugin architecture
 // Each Cortex module (XSIAM, AppSec, etc.) implements the Module trait
 
@@ -8,8 +11,8 @@ use std::collections::HashMap;
 mod xsiam;
 mod appsec;
 
-/// Core trait that all modules must implement
-/// Note: Some methods may not be actively called but define the module contract
+/// Core trait that all modules must implement.
+/// Some methods define the module contract and may not be actively called.
 pub trait Module: Send + Sync {
     /// Unique module identifier (e.g., "xsiam", "appsec")
     /// Used in CLI commands and config.toml [modules.<id>]
@@ -92,6 +95,14 @@ pub enum PullStrategy {
         list_response_path: &'static str,
         uid_field: &'static str,
     },
+
+    /// Offset-based pagination - uses offset and limit query parameters for sequential retrieval
+    /// Used by: AppSec rules, repositories, scans (returns batches with an offset marker)
+    OffsetPaginated {
+        offset_param: &'static str,
+        limit_param: &'static str,
+        page_size: usize,
+    },
 }
 
 /// Registry of all available modules
@@ -152,14 +163,14 @@ mod tests {
     fn test_module_content_types() {
         let registry = ModuleRegistry::load();
         
-        // XSIAM should have 6 content types
+        // XSIAM should have 11 content types
         let xsiam = registry.get("xsiam").unwrap();
         let xsiam_types = xsiam.content_types();
-        assert_eq!(xsiam_types.len(), 6);
+        assert_eq!(xsiam_types.len(), 9);
         
-        // AppSec should have 5 content types
+        // AppSec should have 7 content types
         let appsec = registry.get("appsec").unwrap();
         let appsec_types = appsec.content_types();
-        assert_eq!(appsec_types.len(), 5);
+        assert_eq!(appsec_types.len(), 7);
     }
 }

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: GoCortexIO
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 use anyhow::{Result, Context};
 use reqwest::{Client, Response};
 use serde_json::Value;
@@ -188,14 +191,14 @@ impl ModuleClient {
                     .with_context(|| format!("Failed to send request to {url}"))?
             }
             _ => {
-                return Err(anyhow::anyhow!("Unknown content type: {}", content_type));
+                return Err(anyhow::anyhow!("Unknown content type: {content_type}"));
             }
         };
         
         let status = response.status().as_u16().to_string();
         
         if !response.status().is_success() {
-            return Err(anyhow::anyhow!("HTTP {}", status));
+            return Err(anyhow::anyhow!("HTTP {status}"));
         }
         
         let json: Value = response.json().await
@@ -360,10 +363,7 @@ impl ModuleClient {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
             Err(anyhow::anyhow!(
-                "API {} failed with status {}: {}",
-                operation,
-                status,
-                error_text
+                "API {operation} failed with status {status}: {error_text}"
             ))
         }
     }
@@ -418,9 +418,7 @@ impl ModuleClient {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
             return Err(anyhow::anyhow!(
-                "API request failed with status: {}\nResponse: {}",
-                status,
-                error_text
+                "API request failed with status: {status}\nResponse: {error_text}"
             ));
         }
 
@@ -479,7 +477,7 @@ impl ModuleClient {
                 Ok(yaml_content) => {
                     let mut content_map = std::collections::HashMap::new();
                     
-                    if let Ok(yaml_value) = serde_yaml::from_str::<serde_yaml::Value>(&yaml_content) {
+                    if let Ok(yaml_value) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&yaml_content) {
                         if let Ok(json_value) = serde_json::to_value(&yaml_value) {
                             if let Some(obj) = json_value.as_object() {
                                 for (key, value) in obj {
@@ -603,7 +601,7 @@ impl ModuleClient {
                         if let Some(widgets_data) = first_obj.get("widgets_data").and_then(|d| d.as_array()) {
                             widgets_data
                         } else {
-                            return Err(anyhow::anyhow!("Expected widgets_data in objects[0]: {}", json));
+                            return Err(anyhow::anyhow!("Expected widgets_data in objects[0]: {json}"));
                         }
                     } else {
                         return Ok(Vec::new()); // Empty objects array
@@ -611,7 +609,7 @@ impl ModuleClient {
                 } else if let Some(widgets_data) = json.get("widgets_data").and_then(|d| d.as_array()) {
                     widgets_data
                 } else {
-                    return Err(anyhow::anyhow!("Expected widgets_data array in response: {}", json));
+                    return Err(anyhow::anyhow!("Expected widgets_data array in response: {json}"));
                 }
             }
             "dashboards" => {
@@ -621,7 +619,7 @@ impl ModuleClient {
                         if let Some(dashboards_data) = first_obj.get("dashboards_data").and_then(|d| d.as_array()) {
                             dashboards_data
                         } else {
-                            return Err(anyhow::anyhow!("Expected dashboards_data in objects[0]: {}", json));
+                            return Err(anyhow::anyhow!("Expected dashboards_data in objects[0]: {json}"));
                         }
                     } else {
                         return Ok(Vec::new()); // Empty objects array
@@ -629,7 +627,7 @@ impl ModuleClient {
                 } else if let Some(dashboards_data) = json.get("dashboards_data").and_then(|d| d.as_array()) {
                     dashboards_data
                 } else {
-                    return Err(anyhow::anyhow!("Expected dashboards_data array in response: {}", json));
+                    return Err(anyhow::anyhow!("Expected dashboards_data array in response: {json}"));
                 }
             }
             "authentication_settings" => {
@@ -637,7 +635,7 @@ impl ModuleClient {
                 if let Some(reply_array) = json.get("reply").and_then(|r| r.as_array()) {
                     reply_array
                 } else {
-                    return Err(anyhow::anyhow!("Expected reply array in authentication_settings response: {}", json));
+                    return Err(anyhow::anyhow!("Expected reply array in authentication_settings response: {json}"));
                 }
             }
             _ => {
@@ -660,7 +658,7 @@ impl ModuleClient {
                     // Handle XSIAM correlation rules format {"objects": [...], "objects_count": n}
                     objects_array
                 } else {
-                    return Err(anyhow::anyhow!("Unexpected API response format: {}", json));
+                    return Err(anyhow::anyhow!("Unexpected API response format: {json}"));
                 }
             }
         };
@@ -687,6 +685,9 @@ impl ModuleClient {
             }
             PullStrategy::ScriptCode { list_endpoint, code_endpoint, list_response_path, uid_field } => {
                 self.pull_script_code(content_def, list_endpoint, code_endpoint, list_response_path, uid_field).await
+            }
+            PullStrategy::OffsetPaginated { offset_param, limit_param, page_size } => {
+                self.pull_offset_paginated(content_def, offset_param, limit_param, *page_size).await
             }
         }
     }
@@ -755,6 +756,17 @@ impl ModuleClient {
             let json: Value = response.json().await.context("Failed to parse JSON response")?;
             let objects = self.extract_items_from_response(&json, content_def)?;
             
+            // Check for hasNext field to determine if more pages exist
+            if let Some(has_next) = json.get("hasNext").and_then(|v| v.as_bool()) {
+                all_objects.extend(objects);
+                if !has_next {
+                    break;
+                }
+                page += 1;
+                continue;
+            }
+            
+            // Fall back to current behaviour: break on empty batch
             if objects.is_empty() {
                 break;
             }
@@ -763,6 +775,47 @@ impl ModuleClient {
             page += 1;
         }
         
+        Ok(all_objects)
+    }
+
+    /// Pull offset-paginated content - iterates using offset and limit query parameters
+    async fn pull_offset_paginated(&self, content_def: &ContentTypeDefinition, offset_param: &str, limit_param: &str, page_size: usize) -> Result<Vec<XsiamObject>> {
+        let mut all_objects = Vec::new();
+        let mut offset: usize = 0;
+
+        loop {
+            let url = format!("https://{}{}/{}?{}={}&{}={}",
+                self.fqdn, self.base_api_path, content_def.get_endpoint,
+                offset_param, offset,
+                limit_param, page_size
+            );
+
+            let response = self.client
+                .get(&url)
+                .header("x-xdr-auth-id", &self.api_key_id)
+                .header("Authorization", &self.api_key)
+                .header("Accept", "application/json")
+                .send()
+                .await
+                .with_context(|| format!("Failed to send offset-paginated request to {url}"))?;
+
+            if !response.status().is_success() {
+                return Err(anyhow::anyhow!("API request failed with status: {}", response.status()));
+            }
+
+            let json: Value = response.json().await.context("Failed to parse JSON response")?;
+            let objects = self.extract_items_from_response(&json, content_def)?;
+
+            let batch_size = objects.len();
+            all_objects.extend(objects);
+
+            if batch_size < page_size {
+                break;
+            }
+
+            offset += batch_size;
+        }
+
         Ok(all_objects)
     }
     
@@ -789,7 +842,7 @@ impl ModuleClient {
         
         let scripts_list = self.extract_value_by_path(&json_response, metadata_response_path)?
             .as_array()
-            .ok_or_else(|| anyhow::anyhow!("Expected array at path {}", metadata_response_path))?;
+            .ok_or_else(|| anyhow::anyhow!("Expected array at path {metadata_response_path}"))?;
         
         let mut script_objects = Vec::new();
         
@@ -809,7 +862,7 @@ impl ModuleClient {
                 Ok(yaml_content) => {
                     let mut content_map = std::collections::HashMap::new();
                     
-                    if let Ok(yaml_value) = serde_yaml::from_str::<serde_yaml::Value>(&yaml_content) {
+                    if let Ok(yaml_value) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&yaml_content) {
                         if let Ok(json_value) = serde_json::to_value(&yaml_value) {
                             if let Some(obj) = json_value.as_object() {
                                 for (key, value) in obj {
@@ -923,7 +976,7 @@ impl ModuleClient {
         
         let scripts_list = self.extract_value_by_path(&json_response, list_response_path)?
             .as_array()
-            .ok_or_else(|| anyhow::anyhow!("Expected array at path {}", list_response_path))?;
+            .ok_or_else(|| anyhow::anyhow!("Expected array at path {list_response_path}"))?;
         
         let mut script_objects = Vec::new();
         
@@ -931,7 +984,7 @@ impl ModuleClient {
             let script_uid = script_meta
                 .get(uid_field)
                 .and_then(|uid| uid.as_str())
-                .ok_or_else(|| anyhow::anyhow!("Script missing {} field", uid_field))?;
+                .ok_or_else(|| anyhow::anyhow!("Script missing {uid_field} field"))?;
             
             let script_name = script_meta
                 .get("name")
@@ -1034,9 +1087,22 @@ impl ModuleClient {
             match self.extract_value_by_path(json, path) {
                 Ok(value) => {
                     match value.as_array() {
-                        Some(arr) => arr,
+                        Some(arr) => {
+                            if content_def.name == "rbac_roles" && arr.first().is_some_and(|v| v.is_array()) {
+                                let flattened: Vec<&Value> = arr.iter()
+                                    .filter_map(|v| v.as_array())
+                                    .flatten()
+                                    .collect();
+                                let mut objects = Vec::new();
+                                for item in &flattened {
+                                    let object = XsiamObject::from_api_response(item, content_def.name)?;
+                                    objects.push(object);
+                                }
+                                return Ok(objects);
+                            }
+                            arr
+                        },
                         None => {
-                            // Path exists but isn't an array - possible API change
                             eprintln!("WARNING: Response path '{}' for {} exists but is not an array (found {}). Endpoint may have changed structure or returned error.",
                                 path, content_def.name, value.as_str().unwrap_or("non-string value"));
                             return Ok(Vec::new());
@@ -1055,7 +1121,15 @@ impl ModuleClient {
             match json.as_array() {
                 Some(arr) => arr,
                 None => {
-                    // Root isn't an array - possible API change
+                    if content_def.name == "application_configuration" {
+                        let singleton = vec![json.clone()];
+                        let mut objects = Vec::new();
+                        for item in &singleton {
+                            let object = XsiamObject::from_api_response(item, content_def.name)?;
+                            objects.push(object);
+                        }
+                        return Ok(objects);
+                    }
                     eprintln!("WARNING: Expected array at root for {} but found {}. API response structure may have changed.",
                         content_def.name, json.get("error").and_then(|e| e.as_str()).unwrap_or("non-array response"));
                     return Ok(Vec::new());
@@ -1086,14 +1160,14 @@ impl ModuleClient {
                 
                 if !field.is_empty() {
                     current = current.get(field)
-                        .ok_or_else(|| anyhow::anyhow!("Path segment '{}' not found", field))?;
+                        .ok_or_else(|| anyhow::anyhow!("Path segment '{field}' not found"))?;
                 }
                 
                 current = current.get(index)
-                    .ok_or_else(|| anyhow::anyhow!("Array index {} not found", index))?;
+                    .ok_or_else(|| anyhow::anyhow!("Array index {index} not found"))?;
             } else {
                 current = current.get(segment)
-                    .ok_or_else(|| anyhow::anyhow!("Path segment '{}' not found", segment))?;
+                    .ok_or_else(|| anyhow::anyhow!("Path segment '{segment}' not found"))?;
             }
         }
         

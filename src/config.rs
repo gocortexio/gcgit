@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: GoCortexIO
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 use anyhow::{Result, Context};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -64,9 +67,7 @@ impl ConfigManager {
         
         if !Path::new(&config_path).exists() {
             return Err(anyhow::anyhow!(
-                "Instance '{}' not found. Run 'gcgit init --instance {}' first",
-                instance_name,
-                instance_name
+                "Instance '{instance_name}' not found. Run 'gcgit init --instance {instance_name}' first"
             ));
         }
 
@@ -87,9 +88,9 @@ impl ConfigManager {
             if let Some(data) = module_data {
                 return Ok(ModuleConfig {
                     enabled: data.enabled.unwrap_or(true),
-                    fqdn: expand_env_vars(&data.fqdn)?,
-                    api_key: expand_env_vars(&data.api_key)?,
-                    api_key_id: expand_env_vars(&data.api_key_id)?,
+                    fqdn: resolve_with_fallback(&data.fqdn, "DEMISTO_BASE_URL", "fqdn", module_id)?,
+                    api_key: resolve_with_fallback(&data.api_key, "DEMISTO_API_KEY", "api_key", module_id)?,
+                    api_key_id: resolve_with_fallback(&data.api_key_id, "XSIAM_AUTH_ID", "api_key_id", module_id)?,
                 });
             }
         }
@@ -99,17 +100,15 @@ impl ConfigManager {
             if let Some(xsiam) = &config.xsiam {
                 return Ok(ModuleConfig {
                     enabled: true,
-                    fqdn: expand_env_vars(&xsiam.fqdn)?,
-                    api_key: expand_env_vars(&xsiam.api_key)?,
-                    api_key_id: expand_env_vars(&xsiam.api_key_id)?,
+                    fqdn: resolve_with_fallback(&xsiam.fqdn, "DEMISTO_BASE_URL", "fqdn", module_id)?,
+                    api_key: resolve_with_fallback(&xsiam.api_key, "DEMISTO_API_KEY", "api_key", module_id)?,
+                    api_key_id: resolve_with_fallback(&xsiam.api_key_id, "XSIAM_AUTH_ID", "api_key_id", module_id)?,
                 });
             }
         }
         
         Err(anyhow::anyhow!(
-            "Module '{}' not configured in instance '{}'",
-            module_id,
-            instance_name
+            "Module '{module_id}' not configured in instance '{instance_name}'"
         ))
     }
 
@@ -211,12 +210,38 @@ impl ConfigManager {
     }
 }
 
-// Helper function to expand environment variables in strings
 fn expand_env_vars(input: &str) -> Result<String> {
-    if input.starts_with("${") && input.ends_with("}") {
+    if input.starts_with("${") && input.ends_with('}') {
         let var_name = &input[2..input.len()-1];
-        env::var(var_name).with_context(|| format!("Environment variable {var_name} not set"))
+        match env::var(var_name) {
+            Ok(val) if !val.is_empty() => Ok(val),
+            _ => Ok(String::new()),
+        }
     } else {
         Ok(input.to_string())
+    }
+}
+
+fn resolve_with_fallback(value: &str, fallback_var: &str, field_label: &str, module_id: &str) -> Result<String> {
+    let expanded = expand_env_vars(value)?;
+    if !expanded.is_empty() {
+        return Ok(expanded);
+    }
+    match env::var(fallback_var) {
+        Ok(val) if !val.is_empty() => {
+            let mut resolved = val;
+            if field_label == "fqdn" {
+                resolved = resolved
+                    .trim_start_matches("https://")
+                    .trim_start_matches("http://")
+                    .trim_end_matches('/')
+                    .to_string();
+            }
+            eprintln!("[INFO] Using {fallback_var} as fallback for {field_label} (module: {module_id})");
+            Ok(resolved)
+        }
+        _ => Err(anyhow::anyhow!(
+            "Configuration field '{field_label}' is empty and fallback variable {fallback_var} is not set (module: {module_id})"
+        )),
     }
 }

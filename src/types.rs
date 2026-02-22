@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: GoCortexIO
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -98,6 +101,32 @@ impl XsiamObject {
                     .or_else(|| json.get("type").and_then(|v| v.as_str()).map(|s| s.to_string()))
                     .unwrap_or_else(|| format!("auth_setting_{}", chrono::Utc::now().timestamp()))
             }
+            "scheduled_queries" => {
+                json.get("query_def_id")
+                    .and_then(|v| v.as_str().map(|s| s.to_string()).or_else(|| v.as_i64().map(|i| i.to_string())))
+                    .unwrap_or_else(|| format!("scheduled_query_{}", chrono::Utc::now().timestamp()))
+            }
+            "xql_library" => {
+                json.get("id")
+                    .and_then(|v| v.as_i64().map(|i| i.to_string()).or_else(|| v.as_str().map(|s| s.to_string())))
+                    .unwrap_or_else(|| format!("xql_{}", chrono::Utc::now().timestamp()))
+            }
+            "rbac_users" => {
+                json.get("user_email")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| format!("user_{}", chrono::Utc::now().timestamp()))
+            }
+            "application_configuration" => {
+                json.get("id")
+                    .and_then(|v| v.as_str().map(|s| s.to_string()).or_else(|| v.as_i64().map(|i| i.to_string())))
+                    .unwrap_or_else(|| "application_configuration".to_string())
+            }
+            "application_criteria" => {
+                json.get("id")
+                    .and_then(|v| v.as_str().map(|s| s.to_string()).or_else(|| v.as_i64().map(|i| i.to_string())))
+                    .unwrap_or_else(|| format!("criteria_{}", chrono::Utc::now().timestamp()))
+            }
             _ => {
                 json.get("id")
                     .and_then(|v| v.as_str())
@@ -128,6 +157,11 @@ impl XsiamObject {
                     .and_then(|v| v.as_str())
                     .or_else(|| json.get("setting_name").and_then(|v| v.as_str()))
                     .or_else(|| json.get("type").and_then(|v| v.as_str()))
+                    .map(|s| s.to_string())
+            }
+            "rbac_users" => {
+                json.get("user_email")
+                    .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
             }
             _ => {
@@ -191,7 +225,13 @@ impl XsiamObject {
         let mut content = HashMap::new();
         for (key, value) in json.as_object().unwrap_or(&serde_json::Map::new()) {
             let should_exclude = matches!(key.as_str(), "id" | "name" | "description" | "metadata") ||
-                (content_type == "authentication_settings" && key == "tenant_id");
+                (content_type == "authentication_settings" && key == "tenant_id") ||
+                matches!((content_type, key.as_str()),
+                    ("rbac_users", "last_logged_in") |
+                    ("application_criteria", "createdAt") |
+                    ("application_criteria", "lastUpdated") |
+                    ("application_criteria", "deletedAt")
+                );
             
             if !should_exclude {
                 content.insert(key.clone(), value.clone());

@@ -1,10 +1,10 @@
 [package]
 name = "gcgit"
-version = "2.1.9"
+version = "2.2.1"
 edition = "2021"
 description = "A Rust-based CLI tool for version-controlling Cortex platform configurations (XSIAM, AppSec)"
 authors = ["gcgit team"]
-license = "MIT"
+license = "AGPL-3.0-or-later"
 repository = "https://github.com/example/gcgit"
 homepage = "https://github.com/example/gcgit"
 readme = "README.md"
@@ -17,7 +17,7 @@ path = "src/main.rs"
 clap = { version = "4.5", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-serde_yaml = "0.9"
+serde_yaml_ng = "0.9"
 schemars = { version = "0.8", features = ["derive"] }
 toml = "0.8"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }

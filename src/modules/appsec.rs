@@ -1,5 +1,9 @@
+// SPDX-FileCopyrightText: GoCortexIO
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // AppSec module implementation
-// Supports 5 content types: applications, policies, rules, repositories, integrations
+// Supports 7 content types: applications, policies, rules, repositories, integrations,
+// application_configuration, application_criteria
 
 use super::{Module, ContentTypeDefinition, PullStrategy};
 
@@ -48,18 +52,26 @@ impl Module for AppSecModule {
             ContentTypeDefinition {
                 name: "rules",
                 get_endpoint: "appsec/v1/rules",
-                pull_strategy: PullStrategy::JsonCollection,
+                pull_strategy: PullStrategy::OffsetPaginated {
+                    offset_param: "offset",
+                    limit_param: "limit",
+                    page_size: 100,
+                },
                 id_field: "id",
                 request_body: None,
                 response_path: Some("rules"),
             },
             
-            // Repositories - Code repository configurations (returns array at root)
+            // Repositories - Code repository configurations
             ContentTypeDefinition {
                 name: "repositories",
                 get_endpoint: "appsec/v1/repositories",
-                pull_strategy: PullStrategy::JsonCollection,
-                id_field: "assetId",
+                pull_strategy: PullStrategy::OffsetPaginated {
+                    offset_param: "offset",
+                    limit_param: "limit",
+                    page_size: 100,
+                },
+                id_field: "id",
                 request_body: None,
                 response_path: None,
             },
@@ -73,6 +85,31 @@ impl Module for AppSecModule {
                 request_body: None,
                 response_path: None,
             },
+            
+            // Application configuration - Singleton configuration endpoint
+            ContentTypeDefinition {
+                name: "application_configuration",
+                get_endpoint: "appsec/v1/application/configuration",
+                pull_strategy: PullStrategy::JsonCollection,
+                id_field: "id",
+                request_body: None,
+                response_path: None,
+            },
+            
+            // Application criteria - Filtering criteria for applications
+            ContentTypeDefinition {
+                name: "application_criteria",
+                get_endpoint: "appsec/v1/application/criteria/all",
+                pull_strategy: PullStrategy::Paginated {
+                    page_param: "page",
+                    page_size_param: "pageSize",
+                    page_size: 100,
+                },
+                id_field: "id",
+                request_body: None,
+                response_path: Some("items"),
+            },
+            
         ]
     }
 }
@@ -95,8 +132,8 @@ mod tests {
         let module = AppSecModule;
         let types = module.content_types();
         
-        // Should have 5 content types
-        assert_eq!(types.len(), 5);
+        // Should have 7 content types
+        assert_eq!(types.len(), 7);
         
         // Check content type names
         let type_names: Vec<&str> = types.iter().map(|t| t.name).collect();
@@ -105,6 +142,8 @@ mod tests {
         assert!(type_names.contains(&"rules"));
         assert!(type_names.contains(&"repositories"));
         assert!(type_names.contains(&"integrations"));
+        assert!(type_names.contains(&"application_configuration"));
+        assert!(type_names.contains(&"application_criteria"));
     }
     
     #[test]
@@ -124,15 +163,25 @@ mod tests {
     }
     
     #[test]
-    fn test_repositories_and_integrations_use_json_collection() {
+    fn test_repositories_uses_offset_paginated() {
         let module = AppSecModule;
         let types = module.content_types();
         
-        // Repositories and integrations should use JsonCollection (not Paginated)
         let repos = types.iter().find(|t| t.name == "repositories").unwrap();
-        let integrations = types.iter().find(|t| t.name == "integrations").unwrap();
+        match &repos.pull_strategy {
+            PullStrategy::OffsetPaginated { page_size, .. } => {
+                assert_eq!(*page_size, 100);
+            },
+            _ => panic!("Repositories should use OffsetPaginated pull strategy"),
+        }
+    }
+    
+    #[test]
+    fn test_integrations_uses_json_collection() {
+        let module = AppSecModule;
+        let types = module.content_types();
         
-        assert!(matches!(repos.pull_strategy, PullStrategy::JsonCollection));
+        let integrations = types.iter().find(|t| t.name == "integrations").unwrap();
         assert!(matches!(integrations.pull_strategy, PullStrategy::JsonCollection));
     }
     

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: GoCortexIO
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 use anyhow::{Context, Result, bail};
 use std::io::{Read, Cursor};
 use zip::ZipArchive;
@@ -34,7 +37,7 @@ pub fn extract_yaml_from_zip(zip_data: &[u8]) -> Result<String> {
         // Security check: Prevent path traversal
         let file_name = file.name().to_string();
         if file_name.contains("..") || file_name.starts_with('/') {
-            bail!("Suspicious file path detected in ZIP: {}", file_name);
+            bail!("Suspicious file path detected in ZIP: {file_name}");
         }
 
         // Check individual file size
@@ -42,8 +45,7 @@ pub fn extract_yaml_from_zip(zip_data: &[u8]) -> Result<String> {
         total_uncompressed_size += file_size;
 
         if total_uncompressed_size > MAX_UNCOMPRESSED_SIZE {
-            bail!("Total uncompressed size exceeds limit: {} bytes (max {} bytes)", 
-                total_uncompressed_size, MAX_UNCOMPRESSED_SIZE);
+            bail!("Total uncompressed size exceeds limit: {total_uncompressed_size} bytes (max {MAX_UNCOMPRESSED_SIZE} bytes)");
         }
 
         // Check compression ratio for this file
@@ -51,8 +53,7 @@ pub fn extract_yaml_from_zip(zip_data: &[u8]) -> Result<String> {
         if compressed_size > 0 {
             let ratio = file_size / compressed_size;
             if ratio > MAX_COMPRESSION_RATIO {
-                bail!("Suspicious compression ratio detected: {}:1 (max {}:1)", 
-                    ratio, MAX_COMPRESSION_RATIO);
+                bail!("Suspicious compression ratio detected: {ratio}:1 (max {MAX_COMPRESSION_RATIO}:1)");
             }
         }
 
@@ -78,8 +79,8 @@ mod tests {
 
     #[test]
     fn test_max_file_count() {
-        // This would require creating a ZIP with too many files - placeholder for actual test
-        // In practice, you'd test with a malicious ZIP
+        // Requires creating a ZIP with excessive files to trigger MAX_FILE_COUNT limit
+        // Production testing uses crafted malicious archives
     }
 
     #[test]

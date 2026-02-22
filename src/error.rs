@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: GoCortexIO
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 use anyhow::Result;
 use std::fmt;
 
@@ -43,8 +46,8 @@ impl From<reqwest::Error> for GcgitError {
     }
 }
 
-impl From<serde_yaml::Error> for GcgitError {
-    fn from(err: serde_yaml::Error) -> Self {
+impl From<serde_yaml_ng::Error> for GcgitError {
+    fn from(err: serde_yaml_ng::Error) -> Self {
         GcgitError::ParseError(err.to_string())
     }
 }

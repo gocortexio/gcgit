@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: GoCortexIO
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 use anyhow::{Result, Context};
 use git2::{Repository, Status, StatusOptions, Signature};
 
@@ -20,7 +23,7 @@ impl GitWrapper {
         
         // Ensure the instance directory exists
         if !instance_path.exists() {
-            return Err(anyhow::anyhow!("Instance directory '{}' does not exist", instance_name));
+            return Err(anyhow::anyhow!("Instance directory '{instance_name}' does not exist"));
         }
 
         let repo = Repository::open(instance_name)
@@ -247,7 +250,7 @@ impl GitWrapper {
                     &[],
                 ).context("Failed to create initial commit")?;
             }
-            Err(e) => return Err(anyhow::anyhow!("Failed to get HEAD reference: {}", e)),
+            Err(e) => return Err(anyhow::anyhow!("Failed to get HEAD reference: {e}")),
         }
 
         Ok(())

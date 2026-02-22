@@ -1,98 +1,79 @@
-<div align="center">
-  <img src="assets/gcgit-logo.png" alt="gcgit logo" width="600"/>
-  
-  # gcgit
-  
-  ![Version](https://img.shields.io/badge/version-2.1.9-blue)
-  ![Rust](https://img.shields.io/badge/rust-1.70+-orange)
-  
-  **Version control for Cortex platform security configurations**
-  
-  A Git-based workflow for managing Cortex XSIAM and Cortex Cloud configurations using YAML files and local repositories.
-</div>
+<!-- SPDX-FileCopyrightText: GoCortexIO -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 
----
+<p align="center">
+  <img src="assets/gcgit-logo.png" alt="gcgit" width="600">
+</p>
 
-## Table of Contents
+# gcgit
 
-- [Features](#features)
-- [Supported Modules](#supported-modules)
-- [Quick Start](#quick-start)
-- [Commands](#commands)
-- [Configuration](#configuration)
-- [File Organisation](#file-organisation)
-- [Git Integration](#git-integration)
-- [Architecture](#architecture)
-- [Security](#security)
-- [Building](#building)
+Git-based version control for Cortex platform security configurations.
 
----
+## Overview
+
+gcgit is a command-line tool that synchronises security configurations between Palo Alto Networks Cortex platform instances and local Git repositories. It pulls configurations from Cortex XSIAM and Cortex Cloud APIs, stores them as YAML files, and tracks all changes through Git.
+
+What it does:
+
+- Pulls security configurations from Cortex platform instances via REST APIs
+- Stores each configuration object as an individual YAML file
+- Commits all changes to a local Git repository with descriptive messages
+- Supports multiple Cortex platform modules from a single tool
+- Compares local configurations against remote platform state
+
+Why it exists:
+
+Cortex platform instances have no built-in version control for security configurations. gcgit fills this gap by providing a Git-based audit trail and change tracking mechanism that works across multiple Cortex modules and platform instances.
 
 ## Features
 
-- **Multi-Module Support**: Manage Cortex XSIAM and Cortex Cloud from a single tool
-- **Git-Based Workflow**: Automatic commits, change tracking, and version history
-- **YAML Configuration**: Human-readable configuration files for easy editing and review
-- **Module Architecture**: Plugin-based design enabling support for additional Cortex modules
-- **Environment Variables**: Secure credential management with variable expansion
-- **File Locking**: Prevents concurrent operations that could corrupt data
-- **Zero Dependencies**: Self-contained binary using libgit2 (no external Git required)
-
-### What's New in v2.x
-
-Version 2.x represents a major architectural upgrade from the v1.x single-module design:
-
-| v1.x | v2.x |
-|------|------|
-| Cortex XSIAM only | Multi-module (Cortex XSIAM + Cortex Cloud) |
-| Fixed content types | Extensible plugin architecture |
-| Monolithic design | Shared infrastructure with module traits |
-
----
+- Multi-module support for Cortex XSIAM and Cortex Cloud
+- Automatic Git commits with change tracking and audit trail
+- YAML-based configuration files for human-readable diffs
+- Plugin architecture for adding new Cortex modules
+- Environment variable expansion for secure credential management
+- File locking to prevent concurrent operations
+- Self-contained binary using libgit2 (no external Git installation required)
+- Five reusable pull strategies: JsonCollection, Paginated, OffsetPaginated, ScriptCode, ZipArtifact
 
 ## Supported Modules
 
-### Cortex XSIAM Module
-
-Six content types for security operations:
+### Cortex XSIAM (9 content types)
 
 | Content Type | Description |
 |--------------|-------------|
-| `correlation_searches` | Detection and correlation rules |
-| `dashboards` | Security dashboards and visualisations |
-| `biocs` | Behavioural indicators of compromise |
-| `widgets` | Dashboard components |
-| `authentication_settings` | SSO and authentication configurations |
-| `scripts` | Automation scripts |
+| dashboards | Security dashboards and visualisations |
+| biocs | Behavioural indicators of compromise |
+| correlation_searches | Detection and correlation rules |
+| widgets | Dashboard components |
+| authentication_settings | SSO and authentication configurations |
+| scripts | Automation scripts (two-step code retrieval) |
+| scheduled_queries | XQL scheduled queries |
+| xql_library | Reusable XQL query library |
+| rbac_users | Role-based access control users |
 
-### Cortex Cloud Module
-
-Five content types for application security:
+### Cortex Cloud (7 content types)
 
 | Content Type | Description |
 |--------------|-------------|
-| `applications` | Application inventory and configuration |
-| `policies` | Security policies and rules |
-| `rules` | Detection rules |
-| `repositories` | Code repository connections |
-| `integrations` | Third-party integrations |
-
----
+| applications | Application inventory and configuration |
+| policies | Security policies for threat detection |
+| rules | Custom security rules |
+| repositories | Code repository configurations |
+| integrations | Third-party integrations |
+| application_configuration | Singleton application configuration |
+| application_criteria | Application filtering criteria |
 
 ## Quick Start
 
-### Installation
-
-**Build from source:**
+Build from source:
 
 ```bash
 cargo build --release
 ./target/release/gcgit --version
 ```
 
-### Basic Workflow
-
-**1. Create an instance**
+Create an instance:
 
 ```bash
 gcgit init --instance production
@@ -102,21 +83,29 @@ This creates the following structure:
 
 ```
 production/
-├── .git/                      # Local Git repository
-├── config.toml                # API credentials
-├── xsiam/                     # XSIAM module
-│   ├── dashboards/
-│   ├── correlation_searches/
-│   └── ...
-└── appsec/                    # AppSec module
-    ├── applications/
-    ├── policies/
-    └── ...
++-- .git/
++-- config.toml
++-- xsiam/
+|   +-- dashboards/
+|   +-- correlation_searches/
+|   +-- biocs/
+|   +-- widgets/
+|   +-- authentication_settings/
+|   +-- scripts/
+|   +-- scheduled_queries/
+|   +-- xql_library/
+|   +-- rbac_users/
++-- appsec/
+    +-- applications/
+    +-- policies/
+    +-- rules/
+    +-- repositories/
+    +-- integrations/
+    +-- application_configuration/
+    +-- application_criteria/
 ```
 
-**2. Configure API access**
-
-Edit `production/config.toml`:
+Configure API access in production/config.toml:
 
 ```toml
 [modules.xsiam]
@@ -132,216 +121,99 @@ api_key = "${APPSEC_API_KEY}"
 api_key_id = "${APPSEC_API_KEY_ID}"
 ```
 
-Environment variables are expanded automatically using `${VARIABLE}` syntax.
+Environment variables are expanded automatically using ${VARIABLE} syntax. gcgit also
+recognises DEMISTO_BASE_URL, DEMISTO_API_KEY, and XSIAM_AUTH_ID as fallback variables
+for cross-project compatibility.
 
-**3. Pull configurations**
+Pull configurations:
 
 ```bash
-# Pull from Cortex XSIAM
 gcgit xsiam pull --instance production
-
-# Pull from Cortex Cloud
 gcgit appsec pull --instance production
 ```
 
-All changes are automatically committed to the Git repository with descriptive commit messages.
-
----
+All changes are automatically committed to the local Git repository.
 
 ## Commands
 
-### Instance Management
+| Command | Description |
+|---------|-------------|
+| init --instance NAME | Create a new instance directory with module subdirectories |
+| xsiam pull --instance NAME | Pull all XSIAM configurations from the platform |
+| xsiam diff --instance NAME | Show differences between local and remote |
+| xsiam test --instance NAME | Test API connectivity to the XSIAM module |
+| appsec pull --instance NAME | Pull all AppSec configurations from the platform |
+| appsec diff --instance NAME | Show differences between local and remote |
+| appsec test --instance NAME | Test API connectivity to the AppSec module |
 
-```bash
-# Create new instance directory
-gcgit init --instance <name>
-
-# Check instance status
-gcgit status --instance <name>
-
-# Validate YAML files
-gcgit validate --instance <name>
-```
-
-### Module Operations
-
-Each module supports the same operations through a consistent interface:
-
-```bash
-# Pull configurations from remote platform
-gcgit <module> pull --instance <name>
-
-# Show differences between local and remote
-gcgit <module> diff --instance <name>
-
-# Test API connectivity
-gcgit <module> test --instance <name>
-```
-
-Replace `<module>` with `xsiam` or `appsec`.
-
-**Examples:**
-
-```bash
-# Cortex XSIAM operations
-gcgit xsiam pull --instance production
-gcgit xsiam diff --instance production
-gcgit xsiam test --instance production
-
-# Cortex Cloud operations
-gcgit appsec pull --instance production
-gcgit appsec diff --instance production
-gcgit appsec test --instance production
-```
+Replace xsiam or appsec with any registered module name. Each module supports the same set of operations through a consistent interface.
 
 ### Development Status
 
 | Status | Operations |
 |--------|------------|
-| **Production-Ready** | Pull, Diff, Test, Validate |
-| **Under Development** | Push, Delete, Deploy |
+| Production-ready | pull, diff, test |
+| Under development | push, delete, deploy |
 
-Push functionality is being thoroughly tested before release to prevent accidental configuration changes in production environments.
-
----
+Push operations are disabled pending thorough testing to prevent accidental modification of production configurations.
 
 ## Configuration
 
-### Multi-Module Configuration
-
-Each instance supports multiple modules through `[modules.module_name]` blocks:
+Each instance has a config.toml file with per-module credential blocks:
 
 ```toml
 [modules.xsiam]
 enabled = true
 fqdn = "api-instance.xdr.region.paloaltonetworks.com"
-api_key = "your-xsiam-api-key"
-api_key_id = "your-xsiam-key-id"
+api_key = "${XSIAM_API_KEY}"
+api_key_id = "${XSIAM_API_KEY_ID}"
 
 [modules.appsec]
 enabled = false
 fqdn = "api-instance.xdr.region.paloaltonetworks.com"
-api_key = "your-appsec-api-key"
-api_key_id = "your-appsec-key-id"
+api_key = "${APPSEC_API_KEY}"
+api_key_id = "${APPSEC_API_KEY_ID}"
 ```
 
-Set `enabled = false` to disable a module whilst keeping its configuration.
+Set enabled = false to disable a module whilst keeping its configuration. Each module can use different API credentials and even different platform FQDNs.
 
-### Environment Variables
+Store API keys in environment variables rather than directly in config.toml to prevent credentials from being committed to Git.
 
-API keys can be stored in environment variables for security:
+### Fallback Variables
 
-```bash
-export XSIAM_API_KEY="your-key"
-export XSIAM_API_KEY_ID="your-key-id"
-```
+If the primary environment variables are empty or unset, gcgit checks these fallback variables for cross-project compatibility:
 
-Reference them in configuration:
+| Primary Field | Fallback Variable | Notes |
+|---------------|-------------------|-------|
+| fqdn | DEMISTO_BASE_URL | https:// prefix and trailing slash are stripped automatically |
+| api_key | DEMISTO_API_KEY | Used as-is |
+| api_key_id | XSIAM_AUTH_ID | Used as-is |
 
-```toml
-api_key = "${XSIAM_API_KEY}"
-api_key_id = "${XSIAM_API_KEY_ID}"
-```
-
----
+When a fallback is used, gcgit prints an informational message to the console.
 
 ## File Organisation
 
-Configurations are stored as YAML files in a structured hierarchy:
+Configurations are stored as individual YAML files in a structured hierarchy:
 
 ```
 instance-name/
-├── module-name/
-│   └── content-type/
-│       ├── object-id-1.yaml
-│       ├── object-id-2.yaml
-│       └── ...
-└── config.toml
++-- config.toml
++-- module-name/
+    +-- content-type/
+        +-- object-id.yaml
 ```
 
-**Example:**
-
-```
-production/
-├── xsiam/
-│   ├── dashboards/
-│   │   ├── security-overview.yaml
-│   │   └── threat-analysis.yaml
-│   └── correlation_searches/
-│       └── suspicious-login.yaml
-└── appsec/
-    ├── applications/
-    │   └── webapp-frontend.yaml
-    └── policies/
-        └── data-protection.yaml
-```
-
-Each YAML file contains the complete configuration for one object, making changes easy to track through Git.
-
----
-
-## Git Integration
-
-Every pull operation automatically creates a Git commit with details about what changed. This provides:
-
-- **Change History**: Complete audit trail of all configuration changes
-- **Diff Viewing**: See exactly what changed between versions
-- **Rollback**: Revert to previous configurations using Git
-- **Branching**: Create feature branches for testing configuration changes
-
-The Git repository lives inside each instance directory, keeping everything self-contained.
-
----
-
-## Architecture
-
-### v1.x vs v2.x
-
-**v1.x architecture:**
-- Single module (Cortex XSIAM only)
-- Fixed content type list
-- Monolithic design
-
-**v2.x architecture:**
-- Module trait system with plugin support
-- Shared infrastructure (Git, API client, YAML parser)
-- Four reusable pull strategies (JsonCollection, Paginated, ScriptCode, ZipArtifact)
-- Self-contained modules with declarative content type definitions
-- Easy extension for future Cortex platform modules
-
-### Module System
-
-Each module implements a simple interface:
-- Content type definitions (endpoint, response format, ID field)
-- Pull strategy selection (how to retrieve data)
-- API base path
-
-The tool handles the rest: API communication, Git operations, YAML serialisation, file locking, and change detection.
-
----
-
-## Security
-
-- **Local Storage**: API keys are stored locally in instance configuration files
-- **Environment Variables**: Variable expansion prevents committing secrets to Git
-- **HTTPS Only**: All API communication uses HTTPS with certificate validation
-- **File Locking**: Prevents concurrent operations that could corrupt data
-
-**Never commit API keys or credentials to version control repositories.**
-
----
+Each YAML file contains the complete configuration for one object. Changes to individual objects produce clean, readable Git diffs.
 
 ## Building
 
-### Requirements
+Requirements:
 
 - Rust 1.70 or later
 - Cortex XSIAM and/or Cortex Cloud API access
 - API key and key ID for each module
 
-No external Git installation required - gcgit uses libgit2 for Git operations.
-
-### Build from Source
+No external Git installation is required. gcgit uses libgit2 for all Git operations.
 
 ```bash
 git clone <repository-url>
@@ -352,23 +224,12 @@ cargo build --release
 
 The compiled binary is self-contained with no runtime dependencies.
 
-### Help and Documentation
-
 ```bash
-# Main help
 gcgit --help
-
-# Module-specific help
 gcgit xsiam --help
 gcgit appsec --help
-
-# Command-specific help
-gcgit init --help
-gcgit validate --help
 ```
 
----
+## Licence
 
-<div align="center">
-  <sub>Built with Rust | Version 2.1.9</sub>
-</div>
+This project is licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later). See the [LICENSE](LICENSE) file for the full licence text.

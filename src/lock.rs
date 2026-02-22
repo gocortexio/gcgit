@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: GoCortexIO
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 use anyhow::{Result, Context};
 use std::fs;
 use std::path::PathBuf;
@@ -26,11 +29,8 @@ impl InstanceLock {
                         // Check if the process is still running
                         if Self::is_process_running(locked_pid) {
                             return Err(anyhow::anyhow!(
-                                "Instance '{}' is locked by another gcgit process (PID {}). \
-                                 Wait for the other operation to complete or remove {}.lock if the process is stuck.",
-                                instance_name,
-                                locked_pid,
-                                instance_name
+                                "Instance '{instance_name}' is locked by another gcgit process (PID {locked_pid}). \
+                                 Wait for the other operation to complete or remove {instance_name}.lock if the process is stuck."
                             ));
                         } else {
                             // Stale lock file - process is no longer running

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: GoCortexIO
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 use anyhow::{Result, Context};
 use std::fs;
 use std::path::Path;
@@ -15,7 +18,7 @@ impl YamlParser {
         let content = fs::read_to_string(file_path)
             .with_context(|| format!("Failed to read file: {file_path}"))?;
 
-        let mut object: XsiamObject = serde_yaml::from_str(&content)
+        let mut object: XsiamObject = serde_yaml_ng::from_str(&content)
             .with_context(|| format!("Failed to parse YAML file: {file_path}"))?;
 
         // Infer content type from file path if not specified
@@ -47,7 +50,7 @@ impl YamlParser {
     }
 
     pub fn serialize_object_deterministically(&self, object: &XsiamObject) -> Result<String> {
-        use serde_yaml::{Mapping, Value as YamlValue};
+        use serde_yaml_ng::{Mapping, Value as YamlValue};
 
         let mut yaml_map = Mapping::new();
         
@@ -60,7 +63,7 @@ impl YamlParser {
         yaml_map.insert(YamlValue::String("content_type".to_string()), YamlValue::String(object.content_type.clone()));
         
         // Serialize metadata with consistent ordering
-        let metadata_yaml = serde_yaml::to_value(&object.metadata)?;
+        let metadata_yaml = serde_yaml_ng::to_value(&object.metadata)?;
         yaml_map.insert(YamlValue::String("metadata".to_string()), metadata_yaml);
         
         // Sort content HashMap keys alphabetically for deterministic YAML output
@@ -74,21 +77,22 @@ impl YamlParser {
         // Add content fields in alphabetical order
         for key in sorted_keys {
             if let Some(value) = object.content.get(key) {
-                let yaml_value = serde_json::to_value(value)
-                    .map_err(|e| anyhow::anyhow!("JSON serialisation error: {}", e))
-                    .and_then(|json_val| serde_yaml::to_value(json_val)
-                        .map_err(|e| anyhow::anyhow!("YAML serialisation error: {}", e)))
+                let mut json_val = serde_json::to_value(value)
+                    .map_err(|e| anyhow::anyhow!("JSON serialisation error: {e}"))?;
+                Self::sort_json_arrays(&mut json_val);
+                let yaml_value = serde_yaml_ng::to_value(json_val)
+                    .map_err(|e| anyhow::anyhow!("YAML serialisation error: {e}"))
                     .unwrap_or(YamlValue::Null);
                 yaml_map.insert(YamlValue::String(key.clone()), yaml_value);
             }
         }
 
-        serde_yaml::to_string(&YamlValue::Mapping(yaml_map))
+        serde_yaml_ng::to_string(&YamlValue::Mapping(yaml_map))
             .with_context(|| "Failed to convert to YAML string")
     }
 
-    /// Compare two XsiamObjects using deterministic serialisation to ensure accurate comparison
-    /// Note: This method includes metadata in comparison and is mainly used for debugging
+    /// Compare two XsiamObjects using deterministic serialisation to ensure accurate comparison.
+    /// Includes metadata in comparison; primarily used for debugging.
     #[allow(dead_code)]
     pub fn objects_are_equal(&self, obj1: &XsiamObject, obj2: &XsiamObject) -> Result<bool> {
         let serialized1 = self.serialize_object_deterministically(obj1)?;
@@ -116,7 +120,7 @@ impl YamlParser {
 
     /// Serialize just the content HashMap with deterministic ordering
     fn serialize_content_deterministically(&self, content: &std::collections::HashMap<String, serde_json::Value>) -> Result<String> {
-        use serde_yaml::{Mapping, Value as YamlValue};
+        use serde_yaml_ng::{Mapping, Value as YamlValue};
 
         let mut yaml_map = Mapping::new();
         
@@ -127,16 +131,17 @@ impl YamlParser {
         // Add content fields in alphabetical order
         for key in sorted_keys {
             if let Some(value) = content.get(key) {
-                let yaml_value = serde_json::to_value(value)
-                    .map_err(|e| anyhow::anyhow!("JSON serialisation error: {}", e))
-                    .and_then(|json_val| serde_yaml::to_value(json_val)
-                        .map_err(|e| anyhow::anyhow!("YAML serialisation error: {}", e)))
+                let mut json_val = serde_json::to_value(value)
+                    .map_err(|e| anyhow::anyhow!("JSON serialisation error: {e}"))?;
+                Self::sort_json_arrays(&mut json_val);
+                let yaml_value = serde_yaml_ng::to_value(json_val)
+                    .map_err(|e| anyhow::anyhow!("YAML serialisation error: {e}"))
                     .unwrap_or(YamlValue::Null);
                 yaml_map.insert(YamlValue::String(key.clone()), yaml_value);
             }
         }
 
-        serde_yaml::to_string(&YamlValue::Mapping(yaml_map))
+        serde_yaml_ng::to_string(&YamlValue::Mapping(yaml_map))
             .with_context(|| "Failed to convert content to YAML string")
     }
 
@@ -188,7 +193,27 @@ impl YamlParser {
             }
         }
 
-        Err(anyhow::anyhow!("Unable to infer content type from file path: {}", file_path))
+        Err(anyhow::anyhow!("Unable to infer content type from file path: {file_path}"))
+    }
+
+    fn sort_json_arrays(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Array(arr) => {
+                if arr.iter().all(|v| v.is_string()) {
+                    arr.sort_by(|a, b| a.as_str().unwrap_or("").cmp(b.as_str().unwrap_or("")));
+                } else {
+                    for item in arr.iter_mut() {
+                        Self::sort_json_arrays(item);
+                    }
+                }
+            }
+            serde_json::Value::Object(map) => {
+                for (_key, val) in map.iter_mut() {
+                    Self::sort_json_arrays(val);
+                }
+            }
+            _ => {}
+        }
     }
 
     fn validate_object(&self, object: &XsiamObject) -> Result<()> {

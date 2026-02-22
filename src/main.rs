@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: GoCortexIO
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 use clap::{Parser, CommandFactory};
 use anyhow::Result;
 
@@ -63,7 +66,7 @@ async fn handle_module_command(module_id: &str, command: ModuleCommands) -> Resu
     // Get the module from registry
     let module_registry = ModuleRegistry::load();
     let module = module_registry.get(module_id)
-        .ok_or_else(|| anyhow::anyhow!("Module '{}' not found", module_id))?;
+        .ok_or_else(|| anyhow::anyhow!("Module '{module_id}' not found"))?;
     
     match command {
         ModuleCommands::Push { instance: _ } => {
@@ -105,23 +108,37 @@ async fn handle_module_command(module_id: &str, command: ModuleCommands) -> Resu
                 match module_client.pull_content_type(&content_def).await {
                     Ok(objects) => {
                         println!("  Found {} {}(s)", objects.len(), content_def.name);
-                        for object in objects {
-                            // Create filename from name, falling back to ID if name is empty
-                            let filename = if let Some(name) = &object.name {
+
+                        // Build base filenames and detect collisions
+                        let base_names: Vec<String> = objects.iter().map(|obj| {
+                            if let Some(name) = &obj.name {
                                 if name.trim().is_empty() {
-                                    format!("{}_id_{}", content_def.name.trim_end_matches('s'), object.id)
+                                    format!("{}_id_{}", content_def.name.trim_end_matches('s'), obj.id)
                                 } else {
-                                    name.replace(" ", "_").replace("/", "_").replace("\\", "_")
+                                    name.replace([' ', '/', '\\'], "_")
                                 }
                             } else {
-                                format!("{}_id_{}", content_def.name.trim_end_matches('s'), object.id)
+                                format!("{}_id_{}", content_def.name.trim_end_matches('s'), obj.id)
+                            }
+                        }).collect();
+
+                        // Count occurrences of each base name
+                        let mut name_counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+                        for name in &base_names {
+                            *name_counts.entry(name.as_str()).or_insert(0) += 1;
+                        }
+
+                        for (object, base_name) in objects.iter().zip(base_names.iter()) {
+                            // Disambiguate colliding names by appending the object ID
+                            let filename = if name_counts.get(base_name.as_str()).copied().unwrap_or(1) > 1 {
+                                format!("{}_{}", base_name, object.id)
+                            } else {
+                                base_name.clone()
                             };
-                            
-                            // NEW directory structure: instance/module_id/content_type/filename.yaml
+
                             let file_path = format!("{}/{}/{}/{}.yaml", instance_name, module_id, content_def.name, filename);
-                            yaml_parser.write_file(&file_path, &object)?;
+                            yaml_parser.write_file(&file_path, object)?;
                             println!("  Pulled: {file_path}");
-                            // Store relative path for Git operations (relative to instance directory)
                             let relative_path = format!("{}/{}/{}.yaml", module_id, content_def.name, filename);
                             pulled_files.push(relative_path);
                             _total_pulled += 1;
@@ -578,7 +595,7 @@ fn show_object_differences(yaml_parser: &YamlParser, local: &XsiamObject, remote
         }
         
         // Check content differences
-        let content_diffs = analyze_content_differences(&local.content, &remote.content);
+        let content_diffs = analyse_content_differences(&local.content, &remote.content);
         differences.extend(content_diffs);
         
         // Display differences with helpful formatting
@@ -608,8 +625,8 @@ fn show_object_differences(yaml_parser: &YamlParser, local: &XsiamObject, remote
         }
     }
 
-/// Analyze differences in content HashMap
-fn analyze_content_differences(local: &std::collections::HashMap<String, serde_json::Value>, remote: &std::collections::HashMap<String, serde_json::Value>) -> Vec<String> {
+/// Analyse differences in content HashMap
+fn analyse_content_differences(local: &std::collections::HashMap<String, serde_json::Value>, remote: &std::collections::HashMap<String, serde_json::Value>) -> Vec<String> {
         let mut differences = Vec::new();
         
         // Find keys that exist in both
