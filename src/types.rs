@@ -117,11 +117,25 @@ impl XsiamObject {
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| format!("user_{}", chrono::Utc::now().timestamp()))
             }
+            "datasets" => {
+                // XQL get_datasets currently returns TitleCase keys with spaces
+                // ("Dataset Name") in live tenants, but the published spec documents
+                // snake_case (`dataset_name`). Accept either to stay forward-compatible.
+                json.get("Dataset Name")
+                    .or_else(|| json.get("dataset_name"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| format!("dataset_{}", chrono::Utc::now().timestamp()))
+            }
             "application_configuration" => {
                 json.get("id")
                     .and_then(|v| v.as_str().map(|s| s.to_string()).or_else(|| v.as_i64().map(|i| i.to_string())))
                     .unwrap_or_else(|| "application_configuration".to_string())
             }
+            // Agent Configurations singletons - stable id "settings" so the file
+            // is always written as agent/<content_type>/settings.yaml regardless
+            // of the response payload (which has neither id nor name fields).
+            t if crate::modules::agent::is_agent_singleton(t) => "settings".to_string(),
             "application_criteria" => {
                 json.get("id")
                     .and_then(|v| v.as_str().map(|s| s.to_string()).or_else(|| v.as_i64().map(|i| i.to_string())))
@@ -164,6 +178,14 @@ impl XsiamObject {
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
             }
+            "datasets" => {
+                json.get("Dataset Name")
+                    .or_else(|| json.get("dataset_name"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            }
+            // Agent singletons: deterministic name so the file is "settings.yaml"
+            t if crate::modules::agent::is_agent_singleton(t) => Some("settings".to_string()),
             _ => {
                 json.get("name")
                     .and_then(|v| v.as_str())
@@ -230,8 +252,41 @@ impl XsiamObject {
                     ("rbac_users", "last_logged_in") |
                     ("application_criteria", "createdAt") |
                     ("application_criteria", "lastUpdated") |
-                    ("application_criteria", "deletedAt")
+                    ("application_criteria", "deletedAt") |
+                    // Dataset runtime/usage fields - exclude to prevent constant Git diffs.
+                    // Keep only configuration fields (Dataset Name, Type, Log Update Type,
+                    // TTL, Default Query Target). Both TitleCase (current live API) and
+                    // snake_case (documented spec) variants are excluded for forward compat.
+                    ("datasets", "Last Updated") |
+                    ("datasets", "Total Size Stored") |
+                    ("datasets", "Average Daily Size") |
+                    ("datasets", "Total Events") |
+                    ("datasets", "Average Event Size") |
+                    ("datasets", "Hot Range") |
+                    ("datasets", "Cold Range") |
+                    ("datasets", "Total Days Stored") |
+                    ("datasets", "last_updated") |
+                    ("datasets", "total_size_stored") |
+                    ("datasets", "average_daily_size") |
+                    ("datasets", "total_events") |
+                    ("datasets", "average_event_size") |
+                    ("datasets", "hot_range") |
+                    ("datasets", "cold_range") |
+                    ("datasets", "total_days_stored")
                 );
+
+            // CWP policy `createdAt` and `modifiedAt` are bumped server-side
+            // on every read (verified live: both differ by seconds between
+            // consecutive pulls of the same unmodified policy). Excluding
+            // keeps Git diffs stable.
+            //
+            // Both CWP and AppSec define a `policies` content type, so we
+            // disambiguate on the presence of `policyRules`, which is a
+            // CWP-only field on the policy object.
+            let should_exclude = should_exclude
+                || (content_type == "policies"
+                    && matches!(key.as_str(), "createdAt" | "modifiedAt")
+                    && json.get("policyRules").is_some());
             
             if !should_exclude {
                 content.insert(key.clone(), value.clone());

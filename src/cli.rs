@@ -5,9 +5,9 @@ use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "gcgit")]
-#[command(about = "A Rust-based CLI tool for version-controlling Cortex platform configurations (XSIAM, AppSec).\nSynchronise YAML-based configuration files between local Git repositories and Cortex instances.\n\nhttps://gocortex.io")]
+#[command(about = "A Rust-based CLI tool for version-controlling Cortex platform configurations (XSIAM, AppSec, Agent, CWP).\nSynchronise YAML-based configuration files between local Git repositories and Cortex instances.\n\nhttps://gocortex.io")]
 #[command(version = env!("CARGO_PKG_VERSION"))]
-#[command(long_about = concat!("A Rust-based CLI tool for version-controlling Cortex platform configurations.\nSupports multiple Cortex modules: XSIAM, Application Security.\n\nhttps://gocortex.io\n\nVersion: ", env!("CARGO_PKG_VERSION")))]
+#[command(long_about = concat!("A Rust-based CLI tool for version-controlling Cortex platform configurations.\nSupports multiple Cortex modules: XSIAM, Application Security, Agent Configurations, Cloud Workload Protection.\n\nhttps://gocortex.io\n\nVersion: ", env!("CARGO_PKG_VERSION")))]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -22,6 +22,16 @@ pub enum Commands {
     },
     /// AppSec module commands (applications, policies, rules, repositories, integrations)
     Appsec {
+        #[command(subcommand)]
+        command: ModuleCommands,
+    },
+    /// Agent Configurations module commands (10 global agent settings singletons)
+    Agent {
+        #[command(subcommand)]
+        command: ModuleCommands,
+    },
+    /// CWP module commands (Cloud Workload Protection: policies, registry onboarding)
+    Cwp {
         #[command(subcommand)]
         command: ModuleCommands,
     },

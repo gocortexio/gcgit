@@ -22,6 +22,17 @@ use parser::YamlParser;
 use modules::ModuleRegistry;
 use lock::InstanceLock;
 
+/// Sanitize a remote-supplied ID so it is safe to embed in a local filename.
+/// Keeps only alphanumeric characters, hyphens, and underscores; everything
+/// else (including `/`, `\`, `.`, null bytes, and `..` sequences) is replaced
+/// with `_`.  This prevents path-traversal attacks when object IDs from an
+/// untrusted API response are used to construct file paths.
+fn sanitize_id_for_filename(id: &str) -> String {
+    id.chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect()
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -32,6 +43,12 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Appsec { command }) => {
             handle_module_command("appsec", command).await?;
+        }
+        Some(Commands::Agent { command }) => {
+            handle_module_command("agent", command).await?;
+        }
+        Some(Commands::Cwp { command }) => {
+            handle_module_command("cwp", command).await?;
         }
         Some(Commands::Init { instance }) => {
             handle_init_command(instance).await?;
@@ -113,12 +130,12 @@ async fn handle_module_command(module_id: &str, command: ModuleCommands) -> Resu
                         let base_names: Vec<String> = objects.iter().map(|obj| {
                             if let Some(name) = &obj.name {
                                 if name.trim().is_empty() {
-                                    format!("{}_id_{}", content_def.name.trim_end_matches('s'), obj.id)
+                                    format!("{}_id_{}", content_def.name.trim_end_matches('s'), sanitize_id_for_filename(&obj.id))
                                 } else {
                                     name.replace([' ', '/', '\\'], "_")
                                 }
                             } else {
-                                format!("{}_id_{}", content_def.name.trim_end_matches('s'), obj.id)
+                                format!("{}_id_{}", content_def.name.trim_end_matches('s'), sanitize_id_for_filename(&obj.id))
                             }
                         }).collect();
 
@@ -128,15 +145,54 @@ async fn handle_module_command(module_id: &str, command: ModuleCommands) -> Resu
                             *name_counts.entry(name.as_str()).or_insert(0) += 1;
                         }
 
+                        // Compute the expected base directory for path-confinement checks.
+                        // We canonicalize the current working directory and append the
+                        // instance/module/content_type prefix so we can verify that each
+                        // constructed path remains inside it.
+                        let expected_base = std::env::current_dir()
+                            .map(|cwd| cwd.join(&instance_name).join(&module_id).join(&content_def.name))
+                            .ok();
+
                         for (object, base_name) in objects.iter().zip(base_names.iter()) {
-                            // Disambiguate colliding names by appending the object ID
+                            // Disambiguate colliding names by appending the sanitized object ID
                             let filename = if name_counts.get(base_name.as_str()).copied().unwrap_or(1) > 1 {
-                                format!("{}_{}", base_name, object.id)
+                                format!("{}_{}", base_name, sanitize_id_for_filename(&object.id))
                             } else {
                                 base_name.clone()
                             };
 
                             let file_path = format!("{}/{}/{}/{}.yaml", instance_name, module_id, content_def.name, filename);
+
+                            // Verify the path stays within the intended directory.
+                            // We use std::path::Path::components() to check for `..` and
+                            // absolute-path components without requiring the path to exist yet.
+                            if let Some(ref base) = expected_base {
+                                use std::path::Component;
+                                let constructed = std::path::Path::new(&file_path);
+                                let has_traversal = constructed.components().any(|c| {
+                                    matches!(c, Component::ParentDir | Component::RootDir | Component::Prefix(_))
+                                });
+                                if has_traversal {
+                                    eprintln!("  SECURITY: Skipping object '{}' — constructed path '{}' attempts to escape the pull directory.", object.id, file_path);
+                                    continue;
+                                }
+                                // Additional check: normalised absolute path must be inside base.
+                                let absolute = std::env::current_dir().unwrap_or_default().join(constructed);
+                                // Normalize by resolving `.` components without hitting the FS.
+                                let mut normalised = std::path::PathBuf::new();
+                                for component in absolute.components() {
+                                    match component {
+                                        Component::ParentDir => { normalised.pop(); }
+                                        Component::CurDir => {}
+                                        other => normalised.push(other),
+                                    }
+                                }
+                                if !normalised.starts_with(base) {
+                                    eprintln!("  SECURITY: Skipping object '{}' — path '{}' resolves outside the pull directory.", object.id, file_path);
+                                    continue;
+                                }
+                            }
+
                             yaml_parser.write_file(&file_path, object)?;
                             println!("  Pulled: {file_path}");
                             let relative_path = format!("{}/{}/{}.yaml", module_id, content_def.name, filename);
@@ -389,6 +445,8 @@ async fn handle_init_command(instance: String) -> Result<()> {
     println!("Please edit {instance}/config.toml with your API credentials");
     println!("  Configure modules.xsiam for XSIAM platform access");
     println!("  Configure modules.appsec for Application Security platform access");
+    println!("  Configure modules.agent for Agent Configurations access");
+    println!("  Configure modules.cwp for Cloud Workload Protection access");
     
     Ok(())
 }

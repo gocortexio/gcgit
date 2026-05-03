@@ -11,7 +11,7 @@ Git-based version control for Cortex platform security configurations.
 
 ## Overview
 
-gcgit is a command-line tool that synchronises security configurations between Palo Alto Networks Cortex platform instances and local Git repositories. It pulls configurations from Cortex XSIAM and Cortex Cloud APIs, stores them as YAML files, and tracks all changes through Git.
+gcgit is a command-line tool that synchronises security configurations between Palo Alto Networks Cortex platform instances and local Git repositories. It pulls configurations from Cortex XSIAM, Cortex Cloud AppSec, Agent Configurations, and Cortex Cloud Workload Protection (CWP) APIs, stores them as YAML files, and tracks all changes through Git.
 
 What it does:
 
@@ -27,18 +27,20 @@ Cortex platform instances have no built-in version control for security configur
 
 ## Features
 
-- Multi-module support for Cortex XSIAM and Cortex Cloud
+- Multi-module support for Cortex XSIAM, Cortex Cloud AppSec, Agent Configurations, and Cortex Cloud Workload Protection (CWP)
+- 29 content types across four modules
 - Automatic Git commits with change tracking and audit trail
-- YAML-based configuration files for human-readable diffs
+- Deterministic YAML serialisation with idempotent re-pulls (server-bumped timestamp fields are excluded so unchanged objects produce no diffs)
 - Plugin architecture for adding new Cortex modules
 - Environment variable expansion for secure credential management
 - File locking to prevent concurrent operations
 - Self-contained binary using libgit2 (no external Git installation required)
 - Five reusable pull strategies: JsonCollection, Paginated, OffsetPaginated, ScriptCode, ZipArtifact
+- Graceful handling of licence-gated endpoints (a 403 on an optional endpoint is reported as a warning and the rest of the pull continues)
 
 ## Supported Modules
 
-### Cortex XSIAM (9 content types)
+### Cortex XSIAM (10 content types)
 
 | Content Type | Description |
 |--------------|-------------|
@@ -51,8 +53,9 @@ Cortex platform instances have no built-in version control for security configur
 | scheduled_queries | XQL scheduled queries |
 | xql_library | Reusable XQL query library |
 | rbac_users | Role-based access control users |
+| datasets | XQL dataset definitions (runtime/usage stats excluded) |
 
-### Cortex Cloud (7 content types)
+### Cortex Cloud AppSec (7 content types)
 
 | Content Type | Description |
 |--------------|-------------|
@@ -63,6 +66,30 @@ Cortex platform instances have no built-in version control for security configur
 | integrations | Third-party integrations |
 | application_configuration | Singleton application configuration |
 | application_criteria | Application filtering criteria |
+
+### Agent Configurations (10 content types)
+
+Each Agent Configurations content type is a global singleton that produces exactly one `settings.yaml` file.
+
+| Content Type | Description |
+|--------------|-------------|
+| content_management | Content update settings |
+| agent_status | Agent status reporting configuration |
+| auto_upgrade | Automatic agent upgrade settings |
+| wildfire_analysis | WildFire analysis configuration |
+| informative_btp_issues | Informative BTP issue settings |
+| cortex_xdr_log_collection | XDR log collection configuration |
+| action_center_expiration | Action Center expiration policy |
+| critical_environment_versions | Critical environment version pinning |
+| advanced_analysis | Advanced analysis configuration |
+| endpoint_administration_cleanup | Endpoint administration cleanup policy |
+
+### Cortex Cloud Workload Protection (CWP) (2 content types)
+
+| Content Type | Description |
+|--------------|-------------|
+| policies | CWP policies (server-bumped createdAt/modifiedAt excluded for stable diffs) |
+| registry_onboarding | Registry onboarding instances (requires the Cortex Cloud Runtime Security add-on; returns 403 and is skipped with a warning on tenants without it) |
 
 ## Quick Start
 
@@ -95,14 +122,29 @@ production/
 |   +-- scheduled_queries/
 |   +-- xql_library/
 |   +-- rbac_users/
+|   +-- datasets/
 +-- appsec/
-    +-- applications/
+|   +-- applications/
+|   +-- policies/
+|   +-- rules/
+|   +-- repositories/
+|   +-- integrations/
+|   +-- application_configuration/
+|   +-- application_criteria/
++-- agent/
+|   +-- content_management/
+|   +-- agent_status/
+|   +-- auto_upgrade/
+|   +-- wildfire_analysis/
+|   +-- informative_btp_issues/
+|   +-- cortex_xdr_log_collection/
+|   +-- action_center_expiration/
+|   +-- critical_environment_versions/
+|   +-- advanced_analysis/
+|   +-- endpoint_administration_cleanup/
++-- cwp/
     +-- policies/
-    +-- rules/
-    +-- repositories/
-    +-- integrations/
-    +-- application_configuration/
-    +-- application_criteria/
+    +-- registry_onboarding/
 ```
 
 Configure API access in production/config.toml:
@@ -119,6 +161,18 @@ enabled = true
 fqdn = "api-production.xdr.eu.paloaltonetworks.com"
 api_key = "${APPSEC_API_KEY}"
 api_key_id = "${APPSEC_API_KEY_ID}"
+
+[modules.agent]
+enabled = true
+fqdn = "api-production.xdr.eu.paloaltonetworks.com"
+api_key = "${AGENT_API_KEY}"
+api_key_id = "${AGENT_API_KEY_ID}"
+
+[modules.cwp]
+enabled = true
+fqdn = "api-production.xdr.eu.paloaltonetworks.com"
+api_key = "${CWP_API_KEY}"
+api_key_id = "${CWP_API_KEY_ID}"
 ```
 
 Environment variables are expanded automatically using ${VARIABLE} syntax. gcgit also
@@ -130,6 +184,8 @@ Pull configurations:
 ```bash
 gcgit xsiam pull --instance production
 gcgit appsec pull --instance production
+gcgit agent pull --instance production
+gcgit cwp pull --instance production
 ```
 
 All changes are automatically committed to the local Git repository.
@@ -145,8 +201,14 @@ All changes are automatically committed to the local Git repository.
 | appsec pull --instance NAME | Pull all AppSec configurations from the platform |
 | appsec diff --instance NAME | Show differences between local and remote |
 | appsec test --instance NAME | Test API connectivity to the AppSec module |
+| agent pull --instance NAME | Pull all Agent Configurations singletons from the platform |
+| agent diff --instance NAME | Show differences between local and remote |
+| agent test --instance NAME | Test API connectivity to the Agent module |
+| cwp pull --instance NAME | Pull all CWP configurations from the platform |
+| cwp diff --instance NAME | Show differences between local and remote |
+| cwp test --instance NAME | Test API connectivity to the CWP module |
 
-Replace xsiam or appsec with any registered module name. Each module supports the same set of operations through a consistent interface.
+Each module supports the same set of operations (pull, diff, test) through a consistent interface.
 
 ### Development Status
 
@@ -173,6 +235,18 @@ enabled = false
 fqdn = "api-instance.xdr.region.paloaltonetworks.com"
 api_key = "${APPSEC_API_KEY}"
 api_key_id = "${APPSEC_API_KEY_ID}"
+
+[modules.agent]
+enabled = false
+fqdn = "api-instance.xdr.region.paloaltonetworks.com"
+api_key = "${AGENT_API_KEY}"
+api_key_id = "${AGENT_API_KEY_ID}"
+
+[modules.cwp]
+enabled = false
+fqdn = "api-instance.xdr.region.paloaltonetworks.com"
+api_key = "${CWP_API_KEY}"
+api_key_id = "${CWP_API_KEY_ID}"
 ```
 
 Set enabled = false to disable a module whilst keeping its configuration. Each module can use different API credentials and even different platform FQDNs.
@@ -203,14 +277,14 @@ instance-name/
         +-- object-id.yaml
 ```
 
-Each YAML file contains the complete configuration for one object. Changes to individual objects produce clean, readable Git diffs.
+Each YAML file contains the complete configuration for one object. Changes to individual objects produce clean, readable Git diffs. Singleton content types (Agent Configurations, AppSec `application_configuration`) produce a single `settings.yaml` file per content type.
 
 ## Building
 
 Requirements:
 
 - Rust 1.70 or later
-- Cortex XSIAM and/or Cortex Cloud API access
+- Cortex XSIAM, Cortex Cloud AppSec, Agent Configurations, and/or Cortex Cloud Workload Protection API access
 - API key and key ID for each module
 
 No external Git installation is required. gcgit uses libgit2 for all Git operations.
@@ -228,6 +302,8 @@ The compiled binary is self-contained with no runtime dependencies.
 gcgit --help
 gcgit xsiam --help
 gcgit appsec --help
+gcgit agent --help
+gcgit cwp --help
 ```
 
 ## Licence

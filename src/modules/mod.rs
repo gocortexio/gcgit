@@ -10,6 +10,8 @@ use std::collections::HashMap;
 // Module implementations
 mod xsiam;
 mod appsec;
+pub mod agent;
+mod cwp;
 
 /// Core trait that all modules must implement.
 /// Some methods define the module contract and may not be actively called.
@@ -118,6 +120,8 @@ impl ModuleRegistry {
         // Register all modules here
         modules.insert("xsiam", Box::new(xsiam::XsiamModule));
         modules.insert("appsec", Box::new(appsec::AppSecModule));
+        modules.insert("agent", Box::new(agent::AgentModule));
+        modules.insert("cwp", Box::new(cwp::CwpModule));
         
         Self { modules }
     }
@@ -147,9 +151,11 @@ mod tests {
     fn test_registry_loads_modules() {
         let registry = ModuleRegistry::load();
         
-        // Should load both XSIAM and AppSec modules
+        // Should load XSIAM, AppSec, Agent, and CWP modules
         assert!(registry.get("xsiam").is_some());
         assert!(registry.get("appsec").is_some());
+        assert!(registry.get("agent").is_some());
+        assert!(registry.get("cwp").is_some());
         
         // Module IDs should match
         let xsiam = registry.get("xsiam").unwrap();
@@ -163,14 +169,24 @@ mod tests {
     fn test_module_content_types() {
         let registry = ModuleRegistry::load();
         
-        // XSIAM should have 11 content types
+        // XSIAM should have 10 content types
         let xsiam = registry.get("xsiam").unwrap();
         let xsiam_types = xsiam.content_types();
-        assert_eq!(xsiam_types.len(), 9);
+        assert_eq!(xsiam_types.len(), 10);
         
         // AppSec should have 7 content types
         let appsec = registry.get("appsec").unwrap();
         let appsec_types = appsec.content_types();
         assert_eq!(appsec_types.len(), 7);
+
+        // Agent should have 10 content types
+        let agent = registry.get("agent").unwrap();
+        let agent_types = agent.content_types();
+        assert_eq!(agent_types.len(), 10);
+
+        // CWP should have 2 content types
+        let cwp = registry.get("cwp").unwrap();
+        let cwp_types = cwp.content_types();
+        assert_eq!(cwp_types.len(), 2);
     }
 }

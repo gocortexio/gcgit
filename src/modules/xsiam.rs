@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // XSIAM module implementation
-// Supports 9 content types: scripts, dashboards, biocs, correlation_searches, widgets,
-// authentication_settings, scheduled_queries, xql_library, rbac_users
+// Supports 10 content types: scripts, dashboards, biocs, correlation_searches, widgets,
+// authentication_settings, scheduled_queries, xql_library, rbac_users, datasets
 
 use super::{Module, ContentTypeDefinition, PullStrategy};
 use serde_json::json;
@@ -76,8 +76,6 @@ impl Module for XsiamModule {
             },
             
             // Scripts - Two-step code retrieval via script_uid
-            // Step 1: List scripts via scripts/get_scripts to get script_uid values
-            // Step 2: Fetch code for each script via scripts/get_script_code with script_uid
             ContentTypeDefinition {
                 name: "scripts",
                 get_endpoint: "scripts/get_scripts",
@@ -123,6 +121,19 @@ impl Module for XsiamModule {
                 request_body: Some(json!({"request_data": {}})),
                 response_path: Some("reply"),
             },
+
+            // Datasets - XQL dataset definitions (System, Lookup, Raw, User, Snapshot, Correlation)
+            // Endpoint: /public_api/v1/xql/get_datasets returns {"reply": [{...}]} with TitleCase
+            // field names ("Dataset Name", "Type", etc). Runtime/usage fields are excluded in
+            // types.rs::from_api_response to keep Git diffs stable.
+            ContentTypeDefinition {
+                name: "datasets",
+                get_endpoint: "xql/get_datasets",
+                pull_strategy: PullStrategy::JsonCollection,
+                id_field: "Dataset Name",
+                request_body: Some(json!({"request_data": {}})),
+                response_path: Some("reply"),
+            },
         ]
     }
 }
@@ -144,10 +155,10 @@ mod tests {
     fn test_xsiam_content_types() {
         let module = XsiamModule;
         let types = module.content_types();
-        
-        // Should have 11 content types
-        assert_eq!(types.len(), 9);
-        
+
+        // Should have 10 content types
+        assert_eq!(types.len(), 10);
+
         // Check content type names
         let type_names: Vec<&str> = types.iter().map(|t| t.name).collect();
         assert!(type_names.contains(&"dashboards"));
@@ -159,6 +170,7 @@ mod tests {
         assert!(type_names.contains(&"scheduled_queries"));
         assert!(type_names.contains(&"xql_library"));
         assert!(type_names.contains(&"rbac_users"));
+        assert!(type_names.contains(&"datasets"));
     }
     
     #[test]

@@ -4,6 +4,7 @@
 use anyhow::{Result, Context};
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use std::env;
 use crate::git_wrapper::GitWrapper;
@@ -25,6 +26,8 @@ pub struct XsiamConfig {
 pub struct ModulesConfig {
     pub xsiam: Option<ModuleConfigData>,
     pub appsec: Option<ModuleConfigData>,
+    pub agent: Option<ModuleConfigData>,
+    pub cwp: Option<ModuleConfigData>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -71,6 +74,8 @@ impl ConfigManager {
             ));
         }
 
+        warn_if_world_readable(&config_path);
+
         let config_content = fs::read_to_string(&config_path)
             .with_context(|| format!("Failed to read config file: {config_path}"))?;
 
@@ -82,6 +87,8 @@ impl ConfigManager {
             let module_data = match module_id {
                 "xsiam" => modules.xsiam.as_ref(),
                 "appsec" => modules.appsec.as_ref(),
+                "agent" => modules.agent.as_ref(),
+                "cwp" => modules.cwp.as_ref(),
                 _ => None,
             };
             
@@ -186,6 +193,18 @@ impl ConfigManager {
                     api_key: "${XSIAM_API_KEY}".to_string(),
                     api_key_id: "${XSIAM_API_KEY_ID}".to_string(),
                 }),
+                agent: Some(ModuleConfigData {
+                    enabled: Some(true),
+                    fqdn: "${XSIAM_FQDN}".to_string(),  // Same tenant as XSIAM
+                    api_key: "${XSIAM_API_KEY}".to_string(),
+                    api_key_id: "${XSIAM_API_KEY_ID}".to_string(),
+                }),
+                cwp: Some(ModuleConfigData {
+                    enabled: Some(true),
+                    fqdn: "${XSIAM_FQDN}".to_string(),  // Same tenant as XSIAM
+                    api_key: "${XSIAM_API_KEY}".to_string(),
+                    api_key_id: "${XSIAM_API_KEY_ID}".to_string(),
+                }),
             }),
         };
 
@@ -193,7 +212,7 @@ impl ConfigManager {
             .context("Failed to serialize config template")?;
 
         let config_path = format!("{instance_name}/config.toml");
-        fs::write(&config_path, config_content)
+        write_restricted(&config_path, config_content.as_bytes())
             .with_context(|| format!("Failed to write config file: {config_path}"))?;
 
         // Initialise git repository
@@ -207,6 +226,60 @@ impl ConfigManager {
             .with_context(|| format!("Failed to create .gitignore file: {gitignore_path}"))?;
 
         Ok(())
+    }
+}
+
+/// Write `contents` to `path` with owner-only permissions (0600 on Unix).
+/// Permissions are enforced both at creation time and via an explicit chmod
+/// after writing, so pre-existing files with insecure modes are corrected.
+/// On non-Unix platforms falls back to a plain write.
+fn write_restricted(path: &str, contents: &[u8]) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::fs::{OpenOptions, Permissions};
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+            .with_context(|| format!("Failed to open {path} for writing"))?;
+        file.write_all(contents)
+            .with_context(|| format!("Failed to write to {path}"))?;
+        // Explicitly enforce 0600 to cover pre-existing files whose permissions
+        // were not changed by mode() (mode() only applies at creation time).
+        fs::set_permissions(path, Permissions::from_mode(0o600))
+            .with_context(|| format!("Failed to set permissions on {path}"))?;
+        return Ok(());
+    }
+
+    #[cfg(not(unix))]
+    {
+        fs::write(path, contents)
+            .with_context(|| format!("Failed to write {path}"))?;
+        Ok(())
+    }
+}
+
+/// Emit a warning if `path` is readable by group or others (Unix only).
+fn warn_if_world_readable(path: &str) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = fs::metadata(path) {
+            let mode = meta.permissions().mode();
+            if mode & 0o077 != 0 {
+                eprintln!(
+                    "[WARN] Config file '{}' has permissions {:04o} and is readable by group or \
+                     others. To protect your API credentials run: chmod 600 {}",
+                    path,
+                    mode & 0o777,
+                    path
+                );
+            }
+        }
     }
 }
 

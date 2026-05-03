@@ -10,6 +10,22 @@ use crate::types::XsiamObject;
 use crate::zip_safety;
 use crate::modules::{ContentTypeDefinition, PullStrategy};
 
+/// Maximum number of pagination pages fetched per content-type pull.
+/// Prevents a hostile or malfunctioning API from driving unbounded network
+/// requests and memory growth.
+const MAX_PULL_PAGES: usize = 500;
+
+/// Maximum number of objects accepted per content-type pull across all pages.
+/// Prevents a hostile API from filling local disk with attacker-controlled YAML.
+const MAX_PULL_OBJECTS: usize = 50_000;
+
+/// Maximum response body size in bytes accepted from the API before parsing.
+/// 64 MiB is generous for real-world Cortex responses while bounding memory use.
+const MAX_RESPONSE_BODY_BYTES: usize = 64 * 1024 * 1024;
+
+/// Per-request timeout applied to every outbound HTTP request.
+const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
 pub struct ModuleClient {
     client: Client,
     fqdn: String,
@@ -20,7 +36,10 @@ pub struct ModuleClient {
 
 impl ModuleClient {
     pub fn new(config: ModuleConfig, base_api_path: &str) -> Self {
-        let client = Client::new();
+        let client = Client::builder()
+            .timeout(REQUEST_TIMEOUT)
+            .build()
+            .expect("Failed to build HTTP client");
         Self {
             client,
             fqdn: config.fqdn,
@@ -692,6 +711,51 @@ impl ModuleClient {
         }
     }
     
+    /// Stream a response body chunk-by-chunk, aborting mid-stream once the
+    /// running byte count exceeds `MAX_RESPONSE_BODY_BYTES`.  This prevents
+    /// OOM from large API responses because the process stops reading (and
+    /// therefore stops buffering) as soon as the limit is hit — unlike calling
+    /// `response.bytes().await` which buffers the whole body before any check.
+    async fn read_bounded_body_bytes(response: Response) -> Result<Vec<u8>> {
+        let mut buf: Vec<u8> = Vec::new();
+        let mut response = response;
+        loop {
+            match response.chunk().await.context("Failed to read response chunk")? {
+                None => break,
+                Some(chunk) => {
+                    if buf.len() + chunk.len() > MAX_RESPONSE_BODY_BYTES {
+                        return Err(anyhow::anyhow!(
+                            "API response body exceeds the maximum allowed size of {} bytes. \
+                             Aborting read to prevent resource exhaustion.",
+                            MAX_RESPONSE_BODY_BYTES
+                        ));
+                    }
+                    buf.extend_from_slice(&chunk);
+                }
+            }
+        }
+        Ok(buf)
+    }
+
+    /// Read a response body with streaming size enforcement and parse as JSON.
+    async fn read_bounded_json_response(&self, response: Response) -> Result<Value> {
+        let bytes = Self::read_bounded_body_bytes(response).await?;
+        serde_json::from_slice(&bytes).context("Failed to parse JSON response")
+    }
+
+    /// Truncate an object list to `MAX_PULL_OBJECTS`, warning if truncation occurred.
+    fn truncate_objects(mut objects: Vec<XsiamObject>, content_type: &str) -> Vec<XsiamObject> {
+        if objects.len() > MAX_PULL_OBJECTS {
+            eprintln!(
+                "WARNING: Received {} objects for '{}', which exceeds the limit of {}. \
+                 Truncating to prevent resource exhaustion.",
+                objects.len(), content_type, MAX_PULL_OBJECTS
+            );
+            objects.truncate(MAX_PULL_OBJECTS);
+        }
+        objects
+    }
+
     /// Pull JSON collection - single API call
     async fn pull_json_collection(&self, content_def: &ContentTypeDefinition) -> Result<Vec<XsiamObject>> {
         let url = format!("https://{}{}/{}", self.fqdn, self.base_api_path, content_def.get_endpoint);
@@ -724,8 +788,9 @@ impl ModuleClient {
             return Err(anyhow::anyhow!("API request failed with status: {}", response.status()));
         }
         
-        let json: Value = response.json().await.context("Failed to parse JSON response")?;
-        self.extract_items_from_response(&json, content_def)
+        let json: Value = self.read_bounded_json_response(response).await?;
+        let objects = self.extract_items_from_response(&json, content_def)?;
+        Ok(Self::truncate_objects(objects, content_def.name))
     }
     
     /// Pull paginated content - multiple API calls
@@ -734,6 +799,15 @@ impl ModuleClient {
         let mut page = 1;
         
         loop {
+            if page > MAX_PULL_PAGES {
+                eprintln!("WARNING: pull_paginated for '{}' reached the page limit ({MAX_PULL_PAGES}). Stopping early to prevent resource exhaustion.", content_def.name);
+                break;
+            }
+            if all_objects.len() >= MAX_PULL_OBJECTS {
+                eprintln!("WARNING: pull_paginated for '{}' reached the object limit ({MAX_PULL_OBJECTS}). Stopping early to prevent resource exhaustion.", content_def.name);
+                break;
+            }
+
             let url = format!("https://{}{}/{}?{}={}&{}={}", 
                 self.fqdn, self.base_api_path, content_def.get_endpoint,
                 page_param, page,
@@ -753,13 +827,21 @@ impl ModuleClient {
                 return Err(anyhow::anyhow!("API request failed with status: {}", response.status()));
             }
             
-            let json: Value = response.json().await.context("Failed to parse JSON response")?;
-            let objects = self.extract_items_from_response(&json, content_def)?;
-            
+            let json: Value = self.read_bounded_json_response(response).await?;
+            let mut objects = self.extract_items_from_response(&json, content_def)?;
+
+            // Strictly cap total: truncate this batch if it would overflow the budget.
+            let remaining = MAX_PULL_OBJECTS.saturating_sub(all_objects.len());
+            if objects.len() > remaining {
+                eprintln!("WARNING: pull_paginated for '{}' reached the object limit ({MAX_PULL_OBJECTS}). Truncating batch.", content_def.name);
+                objects.truncate(remaining);
+            }
+
             // Check for hasNext field to determine if more pages exist
             if let Some(has_next) = json.get("hasNext").and_then(|v| v.as_bool()) {
+                let done = !has_next || objects.is_empty() || all_objects.len() + objects.len() >= MAX_PULL_OBJECTS;
                 all_objects.extend(objects);
-                if !has_next {
+                if done {
                     break;
                 }
                 page += 1;
@@ -771,7 +853,11 @@ impl ModuleClient {
                 break;
             }
             
+            let done = all_objects.len() + objects.len() >= MAX_PULL_OBJECTS;
             all_objects.extend(objects);
+            if done {
+                break;
+            }
             page += 1;
         }
         
@@ -782,8 +868,18 @@ impl ModuleClient {
     async fn pull_offset_paginated(&self, content_def: &ContentTypeDefinition, offset_param: &str, limit_param: &str, page_size: usize) -> Result<Vec<XsiamObject>> {
         let mut all_objects = Vec::new();
         let mut offset: usize = 0;
+        let mut page: usize = 0;
 
         loop {
+            if page >= MAX_PULL_PAGES {
+                eprintln!("WARNING: pull_offset_paginated for '{}' reached the page limit ({MAX_PULL_PAGES}). Stopping early to prevent resource exhaustion.", content_def.name);
+                break;
+            }
+            if all_objects.len() >= MAX_PULL_OBJECTS {
+                eprintln!("WARNING: pull_offset_paginated for '{}' reached the object limit ({MAX_PULL_OBJECTS}). Stopping early to prevent resource exhaustion.", content_def.name);
+                break;
+            }
+
             let url = format!("https://{}{}/{}?{}={}&{}={}",
                 self.fqdn, self.base_api_path, content_def.get_endpoint,
                 offset_param, offset,
@@ -803,13 +899,22 @@ impl ModuleClient {
                 return Err(anyhow::anyhow!("API request failed with status: {}", response.status()));
             }
 
-            let json: Value = response.json().await.context("Failed to parse JSON response")?;
-            let objects = self.extract_items_from_response(&json, content_def)?;
+            let json: Value = self.read_bounded_json_response(response).await?;
+            let mut objects = self.extract_items_from_response(&json, content_def)?;
+
+            // Strictly cap total: truncate this batch if it would overflow the budget.
+            let remaining = MAX_PULL_OBJECTS.saturating_sub(all_objects.len());
+            if objects.len() > remaining {
+                eprintln!("WARNING: pull_offset_paginated for '{}' reached the object limit ({MAX_PULL_OBJECTS}). Truncating batch.", content_def.name);
+                objects.truncate(remaining);
+            }
 
             let batch_size = objects.len();
+            let done = all_objects.len() + batch_size >= MAX_PULL_OBJECTS || batch_size < page_size;
             all_objects.extend(objects);
+            page += 1;
 
-            if batch_size < page_size {
+            if done {
                 break;
             }
 
@@ -838,15 +943,19 @@ impl ModuleClient {
             return Err(anyhow::anyhow!("API request failed with status: {}", response.status()));
         }
         
-        let json_response: Value = response.json().await.context("Failed to parse API response as JSON")?;
+        let json_response: Value = self.read_bounded_json_response(response).await?;
         
         let scripts_list = self.extract_value_by_path(&json_response, metadata_response_path)?
             .as_array()
             .ok_or_else(|| anyhow::anyhow!("Expected array at path {metadata_response_path}"))?;
+
+        if scripts_list.len() > MAX_PULL_OBJECTS {
+            eprintln!("WARNING: pull_zip_artifact for '{}' returned {} items, exceeding the limit of {}. Truncating.", content_def.name, scripts_list.len(), MAX_PULL_OBJECTS);
+        }
         
         let mut script_objects = Vec::new();
         
-        for script_meta in scripts_list {
+        for script_meta in scripts_list.iter().take(MAX_PULL_OBJECTS) {
             let script_name = script_meta
                 .get("name")
                 .and_then(|n| n.as_str())
@@ -946,7 +1055,8 @@ impl ModuleClient {
             return Err(anyhow::anyhow!("Failed to download artifact '{}': HTTP {}", filter_value, response.status()));
         }
         
-        let zip_bytes = response.bytes().await.context("Failed to read ZIP response")?;
+        let zip_bytes = Self::read_bounded_body_bytes(response).await
+            .with_context(|| format!("Failed to read ZIP artifact '{filter_value}' within size limit"))?;
         let yaml_content = zip_safety::extract_yaml_from_zip(&zip_bytes)
             .with_context(|| format!("Failed to extract YAML from artifact '{filter_value}' ZIP"))?;
         
@@ -972,15 +1082,19 @@ impl ModuleClient {
             return Err(anyhow::anyhow!("API request failed with status: {}", response.status()));
         }
         
-        let json_response: Value = response.json().await.context("Failed to parse API response as JSON")?;
+        let json_response: Value = self.read_bounded_json_response(response).await?;
         
         let scripts_list = self.extract_value_by_path(&json_response, list_response_path)?
             .as_array()
             .ok_or_else(|| anyhow::anyhow!("Expected array at path {list_response_path}"))?;
+
+        if scripts_list.len() > MAX_PULL_OBJECTS {
+            eprintln!("WARNING: pull_script_code for '{}' returned {} items, exceeding the limit of {}. Truncating.", content_def.name, scripts_list.len(), MAX_PULL_OBJECTS);
+        }
         
         let mut script_objects = Vec::new();
         
-        for script_meta in scripts_list {
+        for script_meta in scripts_list.iter().take(MAX_PULL_OBJECTS) {
             let script_uid = script_meta
                 .get(uid_field)
                 .and_then(|uid| uid.as_str())
@@ -1066,7 +1180,7 @@ impl ModuleClient {
             return Err(anyhow::anyhow!("Failed to get script code for UID '{}': HTTP {}", script_uid, response.status()));
         }
         
-        let json: Value = response.json().await.context("Failed to parse script code response")?;
+        let json: Value = self.read_bounded_json_response(response).await?;
         
         let script_code = json.get("reply")
             .and_then(|r| r.as_str())
@@ -1103,6 +1217,12 @@ impl ModuleClient {
                             arr
                         },
                         None => {
+                            // Singleton handling: Agent Configurations endpoints return
+                            // {"reply": {...singleton object...}} rather than an array.
+                            if value.is_object() && crate::modules::agent::is_agent_singleton(content_def.name) {
+                                let object = XsiamObject::from_api_response(value, content_def.name)?;
+                                return Ok(vec![object]);
+                            }
                             eprintln!("WARNING: Response path '{}' for {} exists but is not an array (found {}). Endpoint may have changed structure or returned error.",
                                 path, content_def.name, value.as_str().unwrap_or("non-string value"));
                             return Ok(Vec::new());

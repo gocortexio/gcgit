@@ -1,8 +1,8 @@
 [package]
 name = "gcgit"
-version = "2.2.1"
+version = "2.3.0"
 edition = "2021"
-description = "A Rust-based CLI tool for version-controlling Cortex platform configurations (XSIAM, AppSec)"
+description = "A Rust-based CLI tool for version-controlling Cortex platform configurations (XSIAM, AppSec, Agent, CWP)"
 authors = ["gcgit team"]
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/example/gcgit"
@@ -21,7 +21,7 @@ serde_yaml_ng = "0.9"
 schemars = { version = "0.8", features = ["derive"] }
 toml = "0.8"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
-git2 = { version = "0.19", default-features = false, features = ["vendored-openssl", "vendored-libgit2"] }
+git2 = { version = "0.20", default-features = false, features = ["vendored-openssl", "vendored-libgit2"] }
 tokio = { version = "1.47", features = ["full"] }
 anyhow = "1.0"
 uuid = { version = "1.0", features = ["v4"] }
