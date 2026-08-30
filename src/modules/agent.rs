@@ -14,7 +14,7 @@
 // `api.rs::extract_items_from_response` wraps the singleton object into a
 // one-element vec when the resolved path yields an object instead of an array.
 
-use super::{Module, ContentTypeDefinition, PullStrategy};
+use super::{ContentTypeDefinition, Module, PullStrategy};
 use serde_json::json;
 
 pub struct AgentModule;
@@ -43,10 +43,6 @@ impl Module for AgentModule {
         "agent"
     }
 
-    fn name(&self) -> &'static str {
-        "Agent Configurations"
-    }
-
     fn base_api_path(&self) -> &'static str {
         "/public_api/v1/configurations/agent"
     }
@@ -61,6 +57,9 @@ impl Module for AgentModule {
                 id_field: "name",
                 request_body: Some(json!({"request_data": {}})),
                 response_path: Some("reply"),
+                dedupe_by_latest: None,
+                excluded_fields: &[],
+                set_valued_fields: &[],
             })
             .collect()
     }
@@ -74,8 +73,10 @@ mod tests {
     fn test_agent_module_metadata() {
         let module = AgentModule;
         assert_eq!(module.id(), "agent");
-        assert_eq!(module.name(), "Agent Configurations");
-        assert_eq!(module.base_api_path(), "/public_api/v1/configurations/agent");
+        assert_eq!(
+            module.base_api_path(),
+            "/public_api/v1/configurations/agent"
+        );
     }
 
     #[test]

@@ -5,7 +5,9 @@ use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "gcgit")]
-#[command(about = "A Rust-based CLI tool for version-controlling Cortex platform configurations (XSIAM, AppSec, Agent, CWP).\nSynchronise YAML-based configuration files between local Git repositories and Cortex instances.\n\nhttps://gocortex.io")]
+#[command(
+    about = "A Rust-based CLI tool for version-controlling Cortex platform configurations (XSIAM, AppSec, Agent, CWP).\nSynchronise YAML-based configuration files between local Git repositories and Cortex instances.\n\nhttps://gocortex.io"
+)]
 #[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(long_about = concat!("A Rust-based CLI tool for version-controlling Cortex platform configurations.\nSupports multiple Cortex modules: XSIAM, Application Security, Agent Configurations, Cloud Workload Protection.\n\nhttps://gocortex.io\n\nVersion: ", env!("CARGO_PKG_VERSION")))]
 pub struct Cli {
@@ -15,8 +17,13 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// XSIAM module commands (scripts, dashboards, biocs, correlation searches, widgets, authentication settings)
-    Xsiam {
+    /// Cortex Platform module commands (dashboards, correlation rules, BIOCs, widgets,
+    /// scripts, XQL library, RBAC, datasets, content packs)
+    ///
+    /// Accepts "xsiam" as an alias. That was the command name before the module was
+    /// renamed, and existing scripts and pipelines continue to work.
+    #[command(alias = "xsiam")]
+    Platform {
         #[command(subcommand)]
         command: ModuleCommands,
     },
@@ -40,6 +47,9 @@ pub enum Commands {
         /// Instance name
         #[arg(long)]
         instance: String,
+        /// Replace an existing config.toml instead of refusing to overwrite it
+        #[arg(long)]
+        force: bool,
     },
     /// Show Git and module synchronisation status
     Status {
@@ -48,6 +58,11 @@ pub enum Commands {
         instance: Option<String>,
     },
     /// Streamlined deployment: validate + add + commit + push to platform
+    ///
+    /// Hidden: not implemented. The command exits with an error. Advertising a write
+    /// path to the platform that does not exist is worse than omitting it, because a
+    /// reader would reasonably believe gcgit can modify a production tenant.
+    #[command(hide = true)]
     Deploy {
         /// Instance name to deploy
         #[arg(long)]
@@ -72,6 +87,9 @@ pub enum Commands {
 #[derive(Subcommand)]
 pub enum ModuleCommands {
     /// Push local changes to the platform
+    ///
+    /// Hidden: not implemented. Invoking it exits with an error.
+    #[command(hide = true)]
     Push {
         /// Instance name
         #[arg(long)]
@@ -82,6 +100,36 @@ pub enum ModuleCommands {
         /// Instance name
         #[arg(long)]
         instance: Option<String>,
+        /// Exit with a non-zero status if any content type fails to pull
+        #[arg(long)]
+        strict: bool,
+        /// Pull only the named content types. Repeatable, and accepts a comma
+        /// separated list. Defaults to all.
+        ///
+        /// num_args allows values separated by spaces as well as commas, so a list
+        /// typed with a space after each comma is not split by the shell into
+        /// arguments clap then rejects. Pull takes no positional arguments, so there
+        /// is nothing for a greedy list to swallow.
+        #[arg(long = "content-type", value_delimiter = ',', num_args = 1..)]
+        content_type: Vec<String>,
+        /// Content types to leave out. Repeatable, and accepts a comma separated list.
+        ///
+        /// A bare name is skipped wherever it appears. Qualify it with a module to skip
+        /// it in one place only, written the same way the repository stores it:
+        /// --skip cwp/policies,platform/attack_surface_rules
+        #[arg(long, value_delimiter = ',', num_args = 1..)]
+        skip: Vec<String>,
+        /// Report what would change without writing files or committing
+        #[arg(long)]
+        dry_run: bool,
+        /// Write files but do not stage or commit them. Use when the surrounding
+        /// workflow owns the commit, such as a scheduled job in a CI pipeline.
+        #[arg(long)]
+        no_git: bool,
+        /// Report per content type rather than per file. Counts, warnings and errors
+        /// are still shown; the line for each individual file is not.
+        #[arg(long, short)]
+        quiet: bool,
     },
     /// Show differences between local and remote
     Diff {
@@ -96,6 +144,9 @@ pub enum ModuleCommands {
         instance: Option<String>,
     },
     /// Delete an object from the platform
+    ///
+    /// Hidden: not implemented. Invoking it exits with an error.
+    #[command(hide = true)]
     Delete {
         /// Instance name
         #[arg(long)]

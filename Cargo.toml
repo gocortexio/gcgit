@@ -1,12 +1,15 @@
+# SPDX-FileCopyrightText: GoCortexIO
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 [package]
 name = "gcgit"
-version = "2.3.0"
+version = "2.6.1"
 edition = "2021"
 description = "A Rust-based CLI tool for version-controlling Cortex platform configurations (XSIAM, AppSec, Agent, CWP)"
-authors = ["gcgit team"]
+authors = ["GoCortexIO"]
 license = "AGPL-3.0-or-later"
-repository = "https://github.com/example/gcgit"
-homepage = "https://github.com/example/gcgit"
+repository = "https://github.com/simonsigre/gcgit"
+homepage = "https://gocortex.io"
 readme = "README.md"
 
 [[bin]]
@@ -18,12 +21,11 @@ clap = { version = "4.5", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml_ng = "0.9"
-schemars = { version = "0.8", features = ["derive"] }
 toml = "0.8"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
-git2 = { version = "0.20", default-features = false, features = ["vendored-openssl", "vendored-libgit2"] }
-tokio = { version = "1.47", features = ["full"] }
+git2 = { version = "0.21", default-features = false, features = ["vendored-openssl", "vendored-libgit2"] }
+# Only the runtime, the macros and the timer are used: #[tokio::main],
+# #[tokio::test] and tokio::time::sleep for retry backoff.
+tokio = { version = "1.47", features = ["macros", "rt-multi-thread", "time"] }
 anyhow = "1.0"
-uuid = { version = "1.0", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
-zip = "2.1"

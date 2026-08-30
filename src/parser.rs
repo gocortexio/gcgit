@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: GoCortexIO
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
 use std::fs;
 use std::path::Path;
 
@@ -40,7 +40,8 @@ impl YamlParser {
         }
 
         // Create a deterministic YAML output with consistent field ordering
-        let yaml_content = self.serialize_object_deterministically(object)
+        let yaml_content = self
+            .serialize_object_deterministically(object)
             .with_context(|| "Failed to serialize object to YAML".to_string())?;
 
         fs::write(file_path, yaml_content)
@@ -53,33 +54,44 @@ impl YamlParser {
         use serde_yaml_ng::{Mapping, Value as YamlValue};
 
         let mut yaml_map = Mapping::new();
-        
+
         // Add fields in a specific order to ensure consistency
-        yaml_map.insert(YamlValue::String("id".to_string()), YamlValue::String(object.id.clone()));
+        yaml_map.insert(
+            YamlValue::String("id".to_string()),
+            YamlValue::String(object.id.clone()),
+        );
         if let Some(name) = &object.name {
-            yaml_map.insert(YamlValue::String("name".to_string()), YamlValue::String(name.clone()));
+            yaml_map.insert(
+                YamlValue::String("name".to_string()),
+                YamlValue::String(name.clone()),
+            );
         }
-        yaml_map.insert(YamlValue::String("description".to_string()), YamlValue::String(object.description.clone()));
-        yaml_map.insert(YamlValue::String("content_type".to_string()), YamlValue::String(object.content_type.clone()));
-        
+        yaml_map.insert(
+            YamlValue::String("description".to_string()),
+            YamlValue::String(object.description.clone()),
+        );
+        yaml_map.insert(
+            YamlValue::String("content_type".to_string()),
+            YamlValue::String(object.content_type.clone()),
+        );
+
         // Serialize metadata with consistent ordering
         let metadata_yaml = serde_yaml_ng::to_value(&object.metadata)?;
         yaml_map.insert(YamlValue::String("metadata".to_string()), metadata_yaml);
-        
-        // Sort content HashMap keys alphabetically for deterministic YAML output
-        // Known limitation: If the API changes the order of fields returned, Git will show
-        // spurious diffs. However, since we control the serialisation, alphabetical sorting
-        // ensures our YAML output is always consistent, preventing false positives in Git diffs.
-        // This trade-off is acceptable as we prioritise stable version control over mirroring API field order.
+
+        // Sort content HashMap keys alphabetically for deterministic YAML output.
+        // Only the top-level key order is normalised. Values are written exactly as
+        // the API returned them: array order is part of the configuration for fields
+        // such as correlation `suppression_fields` and BIOC `mitre_technique_id_and_name`,
+        // so reordering them would mean the stored YAML no longer matches the platform.
         let mut sorted_keys: Vec<_> = object.content.keys().collect();
         sorted_keys.sort();
-        
+
         // Add content fields in alphabetical order
         for key in sorted_keys {
             if let Some(value) = object.content.get(key) {
-                let mut json_val = serde_json::to_value(value)
+                let json_val = serde_json::to_value(value)
                     .map_err(|e| anyhow::anyhow!("JSON serialisation error: {e}"))?;
-                Self::sort_json_arrays(&mut json_val);
                 let yaml_value = serde_yaml_ng::to_value(json_val)
                     .map_err(|e| anyhow::anyhow!("YAML serialisation error: {e}"))
                     .unwrap_or(YamlValue::Null);
@@ -91,84 +103,55 @@ impl YamlParser {
             .with_context(|| "Failed to convert to YAML string")
     }
 
-    /// Compare two XsiamObjects using deterministic serialisation to ensure accurate comparison.
-    /// Includes metadata in comparison; primarily used for debugging.
-    #[allow(dead_code)]
-    pub fn objects_are_equal(&self, obj1: &XsiamObject, obj2: &XsiamObject) -> Result<bool> {
-        let serialized1 = self.serialize_object_deterministically(obj1)?;
-        let serialized2 = self.serialize_object_deterministically(obj2)?;
-        Ok(serialized1 == serialized2)
-    }
-
-    /// Compare two XsiamObjects excluding metadata (for logical comparison)
-    /// This is the preferred method for determining if objects are functionally different
-    pub fn objects_are_logically_equal(&self, obj1: &XsiamObject, obj2: &XsiamObject) -> Result<bool> {
-        // Compare basic fields
-        if obj1.id != obj2.id || 
-           obj1.name != obj2.name || 
-           obj1.description != obj2.description || 
-           obj1.content_type != obj2.content_type {
-            return Ok(false);
-        }
-
-        // Compare content using deterministic serialisation
-        let content1_yaml = self.serialize_content_deterministically(&obj1.content)?;
-        let content2_yaml = self.serialize_content_deterministically(&obj2.content)?;
-        
-        Ok(content1_yaml == content2_yaml)
-    }
-
-    /// Serialize just the content HashMap with deterministic ordering
-    fn serialize_content_deterministically(&self, content: &std::collections::HashMap<String, serde_json::Value>) -> Result<String> {
-        use serde_yaml_ng::{Mapping, Value as YamlValue};
-
-        let mut yaml_map = Mapping::new();
-        
-        // Sort content HashMap keys for consistent ordering
-        let mut sorted_keys: Vec<_> = content.keys().collect();
-        sorted_keys.sort();
-        
-        // Add content fields in alphabetical order
-        for key in sorted_keys {
-            if let Some(value) = content.get(key) {
-                let mut json_val = serde_json::to_value(value)
-                    .map_err(|e| anyhow::anyhow!("JSON serialisation error: {e}"))?;
-                Self::sort_json_arrays(&mut json_val);
-                let yaml_value = serde_yaml_ng::to_value(json_val)
-                    .map_err(|e| anyhow::anyhow!("YAML serialisation error: {e}"))
-                    .unwrap_or(YamlValue::Null);
-                yaml_map.insert(YamlValue::String(key.clone()), yaml_value);
-            }
-        }
-
-        serde_yaml_ng::to_string(&YamlValue::Mapping(yaml_map))
-            .with_context(|| "Failed to convert content to YAML string")
+    /// Compare two objects by the exact bytes each would be written as.
+    ///
+    /// diff must predict pull. Comparing a subset of the object meant diff could
+    /// report no difference for something a subsequent pull then rewrote, and
+    /// show_object_differences printed a note acknowledging the contradiction
+    /// rather than resolving it. If a field produces noise here it also produces
+    /// noise in Git, and the fix is to stop storing that field.
+    pub fn objects_are_logically_equal(
+        &self,
+        obj1: &XsiamObject,
+        obj2: &XsiamObject,
+    ) -> Result<bool> {
+        let a = self.serialize_object_deterministically(obj1)?;
+        let b = self.serialize_object_deterministically(obj2)?;
+        Ok(a == b)
     }
 
     /// Get all local YAML files for specific content types in a module directory
-    /// 
+    ///
     /// # Arguments
     /// * `module_dir` - Path to module directory (e.g., "instance/xsiam" or "instance/appsec")
     /// * `content_type_names` - List of content type subdirectory names to search
-    pub fn get_local_files(&self, module_dir: &str, content_type_names: &[&str]) -> Result<Vec<String>> {
+    pub fn get_local_files(
+        &self,
+        module_dir: &str,
+        content_type_names: &[&str],
+    ) -> Result<Vec<String>> {
         let mut files = Vec::new();
-        
+
         let module_path = Path::new(module_dir);
         if !module_path.exists() {
             return Ok(files);
         }
-        
+
         for content_type in content_type_names {
             let type_path = module_path.join(content_type);
             if type_path.exists() {
-                let entries = fs::read_dir(&type_path)
-                    .with_context(|| format!("Failed to read directory: {}", type_path.display()))?;
+                let entries = fs::read_dir(&type_path).with_context(|| {
+                    format!("Failed to read directory: {}", type_path.display())
+                })?;
 
                 for entry in entries {
                     let entry = entry.context("Failed to read directory entry")?;
                     let path = entry.path();
-                    
-                    if path.extension().is_some_and(|ext| ext == "yaml" || ext == "yml") {
+
+                    if path
+                        .extension()
+                        .is_some_and(|ext| ext == "yaml" || ext == "yml")
+                    {
                         if let Some(path_str) = path.to_str() {
                             files.push(path_str.to_string());
                         }
@@ -182,7 +165,7 @@ impl YamlParser {
 
     fn infer_content_type(&self, file_path: &str) -> Result<String> {
         let path = Path::new(file_path);
-        
+
         if let Some(parent) = path.parent() {
             if let Some(parent_name) = parent.file_name() {
                 if let Some(parent_str) = parent_name.to_str() {
@@ -193,27 +176,9 @@ impl YamlParser {
             }
         }
 
-        Err(anyhow::anyhow!("Unable to infer content type from file path: {file_path}"))
-    }
-
-    fn sort_json_arrays(value: &mut serde_json::Value) {
-        match value {
-            serde_json::Value::Array(arr) => {
-                if arr.iter().all(|v| v.is_string()) {
-                    arr.sort_by(|a, b| a.as_str().unwrap_or("").cmp(b.as_str().unwrap_or("")));
-                } else {
-                    for item in arr.iter_mut() {
-                        Self::sort_json_arrays(item);
-                    }
-                }
-            }
-            serde_json::Value::Object(map) => {
-                for (_key, val) in map.iter_mut() {
-                    Self::sort_json_arrays(val);
-                }
-            }
-            _ => {}
-        }
+        Err(anyhow::anyhow!(
+            "Unable to infer content type from file path: {file_path}"
+        ))
     }
 
     fn validate_object(&self, object: &XsiamObject) -> Result<()> {
@@ -233,5 +198,103 @@ impl YamlParser {
         // which is already validated by the module's content_types list
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{ObjectMetadata, XsiamObject};
+    use serde_json::json;
+    use std::collections::BTreeMap;
+
+    fn object_with_content(content: BTreeMap<String, serde_json::Value>) -> XsiamObject {
+        XsiamObject {
+            id: "rule-1".to_string(),
+            name: Some("Test rule".to_string()),
+            description: "A rule".to_string(),
+            content_type: "correlation_searches".to_string(),
+            metadata: ObjectMetadata::default(),
+            tenant_id: None,
+            content,
+        }
+    }
+
+    #[test]
+    fn string_array_order_is_preserved() {
+        // `suppression_fields` on a correlation rule and `mitre_technique_id_and_name`
+        // on a BIOC are both arrays of strings whose order is part of the
+        // configuration. Sorting them would mean the stored YAML no longer matches
+        // the platform.
+        let mut content = BTreeMap::new();
+        content.insert(
+            "suppression_fields".to_string(),
+            json!(["zeta_field", "alpha_field", "middle_field"]),
+        );
+
+        let yaml = YamlParser::new()
+            .serialize_object_deterministically(&object_with_content(content))
+            .unwrap();
+
+        let zeta = yaml.find("zeta_field").expect("zeta_field must be present");
+        let alpha = yaml
+            .find("alpha_field")
+            .expect("alpha_field must be present");
+        let middle = yaml
+            .find("middle_field")
+            .expect("middle_field must be present");
+        assert!(
+            zeta < alpha && alpha < middle,
+            "array order was not preserved:\n{yaml}"
+        );
+    }
+
+    #[test]
+    fn nested_string_array_order_is_preserved() {
+        let mut content = BTreeMap::new();
+        content.insert(
+            "config".to_string(),
+            json!({"steps": ["third", "first", "second"]}),
+        );
+
+        let yaml = YamlParser::new()
+            .serialize_object_deterministically(&object_with_content(content))
+            .unwrap();
+
+        let third = yaml.find("third").unwrap();
+        let first = yaml.find("first").unwrap();
+        assert!(
+            third < first,
+            "nested array order was not preserved:\n{yaml}"
+        );
+    }
+
+    #[test]
+    fn top_level_keys_are_sorted_for_stable_diffs() {
+        let mut content = BTreeMap::new();
+        content.insert("zebra".to_string(), json!(1));
+        content.insert("apple".to_string(), json!(2));
+
+        let yaml = YamlParser::new()
+            .serialize_object_deterministically(&object_with_content(content))
+            .unwrap();
+
+        assert!(
+            yaml.find("apple").unwrap() < yaml.find("zebra").unwrap(),
+            "top-level keys should be alphabetical:\n{yaml}"
+        );
+    }
+
+    #[test]
+    fn serialisation_is_repeatable() {
+        let mut content = BTreeMap::new();
+        content.insert("b".to_string(), json!(["x", "y"]));
+        content.insert("a".to_string(), json!({"nested": true}));
+        let object = object_with_content(content);
+
+        let parser = YamlParser::new();
+        let first = parser.serialize_object_deterministically(&object).unwrap();
+        let second = parser.serialize_object_deterministically(&object).unwrap();
+        assert_eq!(first, second);
     }
 }
